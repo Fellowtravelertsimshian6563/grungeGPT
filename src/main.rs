@@ -135,7 +135,7 @@ struct ExportGgufArgs {
     output: PathBuf,
 
     /// Context length advertised in the GGUF. Position embeddings are padded to this size.
-    #[arg(long, default_value_t = 4096)]
+    #[arg(long, default_value_t = 8192)]
     context: usize,
 }
 
