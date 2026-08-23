@@ -132,6 +132,10 @@ impl Dataset {
     /// For every sampled sequence, the first `block_size` ids become the input
     /// and the ids shifted by one become the target. This shift is what makes
     /// the model learn next-token prediction.
+    ///
+    /// ## References
+    ///
+    /// - Language modeling objective: <https://huggingface.co/learn/nlp-course/chapter7/6>
     pub fn sample_batch(
         &self,
         rng: &mut StdRng,

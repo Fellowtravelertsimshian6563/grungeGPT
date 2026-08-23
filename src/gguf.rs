@@ -111,6 +111,10 @@ pub fn export_gguf(
 /// # Returns
 ///
 /// A sorted vector of [`TensorEntry`] for every weight accepted by llama.cpp.
+///
+/// ## References
+///
+/// - GGUF spec: <https://github.com/ggerganov/llama.cpp>
 fn collect_tensors(
     varmap: &VarMap,
     config: &GptConfig,
@@ -172,6 +176,10 @@ fn pad_position_embeddings(values: &mut Vec<f32>, config: &GptConfig, context_le
 ///
 /// `Some((gguf_name, shape))` when the weight should be exported, `None` when
 /// it should be skipped.
+///
+/// ## References
+///
+/// - GPT-2 GGUF tensor names: <https://github.com/ggerganov/llama.cpp>
 fn map_tensor_name(
     name: &str,
     config: &GptConfig,
@@ -232,6 +240,10 @@ fn map_tensor_name(
 /// # Errors
 ///
 /// Returns an error on any write failure.
+///
+/// ## References
+///
+/// - GGUF binary layout: <https://github.com/ggerganov/llama.cpp/blob/master/gguf-py/gguf/gguf_writer.py>
 fn write_gguf<W: Write + Seek>(
     writer: &mut W,
     config: &GptConfig,

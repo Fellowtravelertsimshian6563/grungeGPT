@@ -352,6 +352,10 @@ impl Bpe {
     ///
     /// A vector of vocabulary ids. Unknown tokens are replaced with the
     /// `<unk>` id.
+    ///
+    /// ## References
+    ///
+    /// - GPT-2 tokenization: <https://huggingface.co/docs/transformers/tokenizer_summary>
     pub fn encode_ids(&self, text: &str) -> Vec<u32> {
         let unk = self.id(UNK_TOKEN).unwrap_or(0);
         self.encode(text)
@@ -389,6 +393,10 @@ impl Bpe {
     /// # Returns
     ///
     /// The decoded UTF-8 text. Unknown ids are rendered as `<unk>`.
+    ///
+    /// ## References
+    ///
+    /// - Decoding strategies: <https://huggingface.co/docs/transformers/generation_strategies>
     pub fn decode_ids(&self, ids: &[u32]) -> String {
         let tokens: Vec<String> = ids
             .iter()
@@ -473,6 +481,10 @@ impl Bpe {
     /// # Errors
     ///
     /// Returns an error when the file cannot be created or written.
+    ///
+    /// ## References
+    ///
+    /// - Serde JSON: <https://serde.rs>
     pub fn save(&self, path: &Path) -> Result<()> {
         let file = std::fs::File::create(path)
             .with_context(|| format!("failed to create tokenizer file {}", path.display()))?;
@@ -494,6 +506,10 @@ impl Bpe {
     /// # Errors
     ///
     /// Returns an error when the file cannot be opened or parsed.
+    ///
+    /// ## References
+    ///
+    /// - Serde JSON: <https://serde.rs>
     pub fn load(path: &Path) -> Result<Self> {
         let file = std::fs::File::open(path)
             .with_context(|| format!("failed to open tokenizer file {}", path.display()))?;

@@ -69,6 +69,11 @@ pub struct TrainConfig {
 /// loss is measured against the shifted targets, and AdamW updates the weights.
 /// When `initial_varmap` is provided, the model weights are preserved but the
 /// optimizer state starts fresh.
+///
+/// ## References
+///
+/// - AdamW paper: <https://arxiv.org/abs/1711.05101>
+/// - Karpathy training lecture: <https://www.youtube.com/watch?v=kCc8FmEb1nY>
 pub fn train_model(
     dataset: &Dataset,
     config: &GptConfig,

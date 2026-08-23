@@ -380,6 +380,10 @@ impl Gpt {
     /// # Errors
     ///
     /// Returns an error on invalid shapes or device failures.
+    ///
+    /// ## References
+    ///
+    /// - Transformer forward pass: <https://arxiv.org/abs/1706.03762>
     pub fn forward(&self, input: &Tensor, train: bool) -> CandleResult<Tensor> {
         let (batch, seq) = input.dims2()?;
         let positions = Tensor::arange(0u32, seq as u32, input.device())?
@@ -433,6 +437,10 @@ impl Gpt {
 ///
 /// Returns an error when the directory cannot be created, weights cannot be
 /// saved, or config cannot be written.
+///
+/// ## References
+///
+/// - Safetensors format: <https://github.com/huggingface/safetensors>
 pub fn save_checkpoint(varmap: &VarMap, config: &GptConfig, out_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(out_dir)
         .with_context(|| format!("failed to create {}", out_dir.display()))?;
@@ -464,6 +472,10 @@ pub fn save_checkpoint(varmap: &VarMap, config: &GptConfig, out_dir: &Path) -> R
 /// # Errors
 ///
 /// Returns an error when config or weights cannot be read.
+///
+/// ## References
+///
+/// - Safetensors format: <https://github.com/huggingface/safetensors>
 pub fn load_checkpoint(config_path: &Path, model_path: &Path, device: &Device) -> Result<Gpt> {
     let file = std::fs::File::open(config_path)
         .with_context(|| format!("failed to open {}", config_path.display()))?;

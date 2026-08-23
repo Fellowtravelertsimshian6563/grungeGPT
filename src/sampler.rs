@@ -121,6 +121,10 @@ pub fn generate(
 /// # Errors
 ///
 /// Returns an error when logits cannot be read from the tensor.
+///
+/// ## References
+///
+/// - Text degeneration paper: <https://arxiv.org/abs/1904.09751>
 fn sample_token(
     logits: &Tensor,
     temperature: f64,
