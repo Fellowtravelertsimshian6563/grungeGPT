@@ -1,3 +1,31 @@
+//! # Model
+//!
+//! A decoder-only transformer in the style of GPT-2.
+//!
+//! ## Architecture
+//!
+//! 1. Token embeddings map token ids to vectors.
+//! 2. Position embeddings add the position of each token.
+//! 3. A stack of transformer blocks processes the sequence.
+//! 4. A final layer norm and linear head predict the next token.
+//!
+//! Each transformer block contains:
+//!
+//! - Causal multi-head self-attention, so a token can only attend to itself and
+//!   previous tokens.
+//! - A two-layer MLP with GELU activation.
+//! - Pre-norm LayerNorm and residual connections, which make deep networks
+//!   easier to optimize.
+//!
+//! ## References
+//!
+//! - Transformer paper: <https://arxiv.org/abs/1706.03762>
+//! - GPT-2 paper: <https://d4mucfpksywv.cloudfront.net/better-language-models/language-models.pdf>
+//! - Layer Normalization paper: <https://arxiv.org/abs/1607.06450>
+//! - 3Blue1Brown, "But what is a GPT?": <https://www.3blue1brown.com/topics/neural-networks>
+//! - Karpathy, "Let's build GPT: from scratch": <https://www.youtube.com/watch?v=kCc8FmEb1nY>
+//! - Candle examples: <https://github.com/huggingface/candle/tree/main/candle-examples>
+
 use anyhow::{Context, Result};
 use candle_core::{D, DType, Device, Result as CandleResult, Tensor};
 use candle_nn::{Embedding, LayerNorm, Linear, Module, VarBuilder, VarMap};
@@ -5,6 +33,16 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Hyperparameters for the decoder-only transformer.
+///
+/// - `vocab_size`: number of tokens in the vocabulary.
+/// - `block_size`: maximum number of tokens the model can attend to.
+/// - `n_layer`: number of transformer blocks.
+/// - `n_embd`: embedding width.
+/// - `n_head`: number of attention heads.
+/// - `dropout`: regularization probability, applied during training.
+///
+/// See the GPT-2 paper <https://d4mucfpksywv.cloudfront.net/better-language-models/language-models.pdf>
+/// for the original architecture choices.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GptConfig {
     pub vocab_size: usize,

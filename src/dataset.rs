@@ -1,3 +1,26 @@
+//! # Dataset
+//!
+//! Converts raw text files into fixed-length token sequences for language
+//! modeling.
+//!
+//! ## How language model data works
+//!
+//! A decoder-only GPT is trained to predict the next token. For every sequence
+//! of `block_size + 1` tokens, the first `block_size` tokens are the input and
+//! the remaining tokens are the targets. The model sees only past tokens thanks
+//! to causal masking.
+//!
+//! Each document is prefixed with `<s>` and suffixed with `<eos>`, so the model
+//! learns where a song or chapter starts and where it ends. Short chunks are
+//! padded with `<eos>`.
+//!
+//! ## References
+//!
+//! - Transformer paper: <https://arxiv.org/abs/1706.03762>
+//! - GPT-2 paper: <https://d4mucfpksywv.cloudfront.net/better-language-models/language-models.pdf>
+//! - Karpathy, "Let's build GPT: from scratch": <https://www.youtube.com/watch?v=kCc8FmEb1nY>
+//! - Hugging Face course, "Datasets": <https://huggingface.co/learn/nlp-course>
+
 use crate::tokenizer::Bpe;
 use anyhow::{Context, Result};
 use candle_core::{Device, Tensor};

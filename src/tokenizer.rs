@@ -1,3 +1,37 @@
+//! # Tokenizer
+//!
+//! A byte pair encoding (BPE) tokenizer compatible with llama.cpp GPT-2
+//! tokenizers.
+//!
+//! ## What is BPE?
+//!
+//! BPE starts with single characters and repeatedly merges the most frequent
+//! adjacent pair of symbols into a new symbol. The result is a vocabulary that
+//! contains common subwords like `"ing"` or `" the"`, so the model does not
+//! have to learn every word from raw characters.
+//!
+//! ## Why byte level?
+//!
+//! GPT-2 maps every possible byte to a unicode character before BPE. This
+//! guarantees that any UTF-8 text can be tokenized without unknown tokens.
+//! Spaces become `Ġ`, newlines become `Ċ`, and all other bytes map to
+//! printable unicode. The same mapping is used by llama.cpp, which is why a
+//! model trained with this tokenizer can be exported to GGUF and run in Ollama.
+//!
+//! ## References
+//!
+//! - BPE paper: <https://arxiv.org/abs/1508.07909>
+//! - GPT-2 paper: <https://d4mucfpksywv.cloudfront.net/better-language-models/language-models.pdf>
+//! - Karpathy, "Let's build the GPT Tokenizer": <https://www.youtube.com/watch?v=zduSFxRajkE>
+//! - Hugging Face tokenizer docs: <https://huggingface.co/docs/tokenizers>
+//!
+//! ## Files
+//!
+//! - `Bpe::train` learns merge rules from raw text.
+//! - `Bpe::encode` converts text to token strings.
+//! - `Bpe::decode` converts token strings back to text.
+//! - `Bpe::save` and `Bpe::load` persist the vocabulary as JSON.
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -76,6 +110,10 @@ pub struct Bpe {
 
 impl Bpe {
     /// Train a byte level BPE tokenizer from a set of texts.
+    ///
+    /// The trainer counts word frequencies, builds initial character vocabularies,
+    /// and repeatedly merges the most frequent adjacent pair. See the BPE paper
+    /// <https://arxiv.org/abs/1508.07909>.
     pub fn train(texts: &[String], num_merges: usize) -> Self {
         let mut word_freq: HashMap<String, usize> = HashMap::new();
         for text in texts {
@@ -206,6 +244,10 @@ impl Bpe {
     }
 
     /// Encode text into byte level token strings.
+    ///
+    /// Each pre-tokenized word is split into characters and merged using the
+    /// learned BPE ranks. See Karpathy's tokenizer video
+    /// <https://www.youtube.com/watch?v=zduSFxRajkE>.
     pub fn encode(&self, text: &str) -> Vec<String> {
         let mut tokens = Vec::new();
         for word in Self::pretokenize(text) {
@@ -242,6 +284,9 @@ impl Bpe {
     }
 
     /// Decode byte level token strings back into text.
+    ///
+    /// Tokens are concatenated and byte-decoded back to UTF-8. See the GPT-2
+    /// paper's byte encoding appendix <https://d4mucfpksywv.cloudfront.net/better-language-models/language-models.pdf>.
     pub fn decode(&self, tokens: &[String]) -> String {
         let encoded: String = tokens.concat();
         byte_decode(&encoded)

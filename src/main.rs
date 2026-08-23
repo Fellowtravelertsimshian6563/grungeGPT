@@ -1,10 +1,27 @@
-use anyhow::Result;
-use candle_core::Device;
+//! # grungeGPT CLI
+//!
+//! Command line interface for downloading lyrics, training the model,
+//! generating text, and exporting GGUF files for Ollama.
+//!
+//! ## Commands
+//!
+//! - `go`: download lyrics if needed, train, and generate.
+//! - `fetch-lyrics`: download lyrics from lyrics.ovh.
+//! - `tokenizer`: train and save a tokenizer.
+//! - `train`: train the GPT model.
+//! - `generate` / `gen`: generate text from a checkpoint.
+//! - `export` / `export-gguf`: write a GGUF file for Ollama.
+//!
+//! Run `grungegpt --help` for all options.
+
+use anyhow::{Context, Result};
+use candle_core::{DType, Device};
+use candle_nn::{VarBuilder, VarMap};
 use clap::{Args, Parser, Subcommand};
 use grungegpt::dataset::{Dataset, load_lyrics_dir, lyrics_file_count};
 use grungegpt::fetcher::fetch_lyrics;
 use grungegpt::gguf::export_gguf;
-use grungegpt::model::{GptConfig, load_checkpoint, save_checkpoint};
+use grungegpt::model::{Gpt, GptConfig, load_checkpoint, save_checkpoint};
 use grungegpt::sampler::{GenerateConfig, generate};
 use grungegpt::tokenizer::Bpe;
 use grungegpt::trainer::{TrainConfig, train_model};
@@ -149,6 +166,10 @@ struct TrainArgs {
     #[arg(long)]
     tokenizer: Option<PathBuf>,
 
+    /// Path to an existing model.safetensors to continue training from.
+    #[arg(long)]
+    resume: Option<PathBuf>,
+
     /// Number of BPE merges to learn when no tokenizer is provided.
     #[arg(long, default_value_t = 512)]
     merges: usize,
@@ -262,6 +283,7 @@ fn run_go(args: GoArgs) -> Result<()> {
     let train_args = TrainArgs {
         data: args.data.clone(),
         tokenizer: None,
+        resume: None,
         merges: 512,
         out_dir: args.out_dir.clone(),
         steps: args.steps,
@@ -358,7 +380,26 @@ fn run_train(args: TrainArgs) -> Result<()> {
         device
     );
 
-    let (varmap, _model) = train_model(&dataset, &config, &train_config, &device)?;
+    let initial_varmap = match &args.resume {
+        Some(path) => {
+            let mut varmap = VarMap::new();
+            let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
+            let _model = Gpt::new(vb, &config)?;
+            varmap
+                .load(path)
+                .with_context(|| format!("failed to load checkpoint {}", path.display()))?;
+            Some(varmap)
+        }
+        None => None,
+    };
+
+    let (varmap, _model) = train_model(
+        &dataset,
+        &config,
+        &train_config,
+        &device,
+        initial_varmap.as_ref(),
+    )?;
     save_checkpoint(&varmap, &config, &args.out_dir)?;
 
     let tokenizer_path = args.out_dir.join("tokenizer.json");

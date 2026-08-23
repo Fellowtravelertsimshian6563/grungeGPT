@@ -1,3 +1,27 @@
+//! # GGUF export
+//!
+//! Writes the trained Candle model into the GGUF format used by llama.cpp and
+//! Ollama.
+//!
+//! ## What is GGUF?
+//!
+//! GGUF is a binary format for neural network weights and metadata. It stores:
+//!
+//! 1. A magic number and format version.
+//! 2. Metadata key-value pairs such as architecture, context length, and the
+//!    tokenizer.
+//! 3. Tensor names, shapes, types, and offsets.
+//! 4. Aligned tensor data.
+//!
+//! This exporter uses the `gpt2` architecture, so llama.cpp can load the model
+//! with its standard GPT-2 implementation.
+//!
+//! ## References
+//!
+//! - llama.cpp GGUF specification: <https://github.com/ggerganov/llama.cpp/blob/master/gguf-py/gguf/gguf_reader.py>
+//! - Ollama Modelfile docs: <https://docs.ollama.com/modelfile>
+//! - Hugging Face safetensors format: <https://github.com/huggingface/safetensors>
+
 use crate::model::{Gpt, GptConfig};
 use crate::tokenizer::Bpe;
 use anyhow::{Context, Result};
@@ -24,6 +48,9 @@ struct TensorEntry {
 }
 
 /// Export a trained checkpoint and tokenizer to a GPT-2 architecture GGUF file.
+///
+/// The exported file can be loaded by llama.cpp or served by Ollama. See the
+/// GGUF reference in llama.cpp <https://github.com/ggerganov/llama.cpp>.
 pub fn export_gguf(
     config_path: &Path,
     model_path: &Path,

@@ -1,3 +1,22 @@
+//! # Lyrics fetcher
+//!
+//! Downloads song lyrics from the public lyrics.ovh API.
+//!
+//! This module exists so the project can bootstrap its own training data. The
+//! lyrics are cached as plain text files under `data/lyrics` and are not
+//! committed to git.
+//!
+//! ## API notes
+//!
+//! lyrics.ovh is a free, unofficial lyrics API. The fetcher requests one song
+//! per artist, filters out boilerplate noise, and saves each result as a text
+//! file.
+//!
+//! ## References
+//!
+//! - lyrics.ovh API: <https://lyricsovh.docs.apiary.io>
+//! - For larger public corpora, Project Gutenberg: <https://www.gutenberg.org>
+
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::io::Write;

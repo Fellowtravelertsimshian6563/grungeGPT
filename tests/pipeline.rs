@@ -28,7 +28,7 @@ fn trains_saves_loads_and_generates() {
         seed: 42,
     };
 
-    let (varmap, _model) = train_model(&dataset, &config, &train_config, &device).unwrap();
+    let (varmap, _model) = train_model(&dataset, &config, &train_config, &device, None).unwrap();
 
     let out_dir = std::env::temp_dir().join(format!(
         "grungegpt-test-{}-{}",

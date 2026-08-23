@@ -1,3 +1,23 @@
+//! # Sampler
+//!
+//! Generates text token by token using the trained model.
+//!
+//! ## Sampling methods
+//!
+//! - **Temperature** divides the logits before softmax. Low temperatures make
+//!   the output more deterministic, high temperatures make it more random.
+//! - **Top-k** keeps only the `k` most likely tokens and samples from those,
+//!   which avoids very unlikely tokens while retaining some randomness.
+//!
+//! Generation stops when the model emits the `<eos>` token or reaches the
+//! requested token limit.
+//!
+//! ## References
+//!
+//! - "The Curious Case of Neural Text Degeneration": <https://arxiv.org/abs/1904.09751>
+//! - Karpathy, "Let's build GPT: from scratch": <https://www.youtube.com/watch?v=kCc8FmEb1nY>
+//! - Hugging Face generation strategies: <https://huggingface.co/docs/transformers/generation_strategies>
+
 use crate::model::Gpt;
 use crate::tokenizer::Bpe;
 use anyhow::Result;
@@ -8,13 +28,21 @@ use rand::{Rng, SeedableRng};
 /// Sampling options for lyric generation.
 #[derive(Debug, Clone)]
 pub struct GenerateConfig {
+    /// Maximum tokens to generate before stopping.
     pub max_tokens: usize,
+    /// Softmax temperature. Higher is more random, lower is more greedy.
     pub temperature: f64,
+    /// Keep only the top-k most likely tokens when sampling.
     pub top_k: Option<usize>,
+    /// Random seed for reproducible sampling.
     pub seed: u64,
 }
 
 /// Generate text from a trained model using the configured sampler.
+///
+/// Generation stops when the model emits `<eos>` or `max_tokens` is reached.
+/// See <https://arxiv.org/abs/1904.09751> for the degeneracy problems that
+/// temperature and top-k are designed to mitigate.
 pub fn generate(
     model: &Gpt,
     tokenizer: &Bpe,

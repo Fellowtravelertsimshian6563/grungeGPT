@@ -1,3 +1,25 @@
+//! # Trainer
+//!
+//! Runs the AdamW optimizer over the language modeling objective.
+//!
+//! ## What the model learns
+//!
+//! For every input token the model outputs a probability distribution over the
+//! vocabulary. The loss is cross-entropy between those distributions and the
+//! actual next tokens. Minimizing this loss makes the model assign high
+//! probability to real text, which is how it learns language patterns.
+//!
+//! AdamW is a popular optimizer because it uses per-parameter adaptive learning
+//! rates and decouples weight decay from the gradient update.
+//!
+//! ## References
+//!
+//! - Adam paper: <https://arxiv.org/abs/1412.6980>
+//! - AdamW paper: <https://arxiv.org/abs/1711.05101>
+//! - Cross-entropy: <https://en.wikipedia.org/wiki/Cross_entropy>
+//! - Karpathy, "Let's build GPT: from scratch": <https://www.youtube.com/watch?v=kCc8FmEb1nY>
+//! - Candle optimizer docs: <https://docs.rs/candle-nn>
+
 use crate::dataset::Dataset;
 use crate::model::{Gpt, GptConfig};
 use anyhow::Result;
@@ -10,21 +32,33 @@ use std::time::Instant;
 /// Training loop configuration.
 #[derive(Debug, Clone)]
 pub struct TrainConfig {
+    /// Sequences per optimizer step.
     pub batch_size: usize,
+    /// Total optimizer steps in this run.
     pub steps: usize,
+    /// AdamW learning rate. See <https://arxiv.org/abs/1412.6980>.
     pub learning_rate: f64,
+    /// Print loss every N steps.
     pub eval_every: usize,
+    /// Random seed for batch sampling and reproducibility.
     pub seed: u64,
 }
 
 /// Train a GPT model on a dataset and return the weights and model.
+///
+/// Pass `initial_varmap` to continue from an existing checkpoint. The optimizer
+/// state starts fresh, but the model weights are preserved.
 pub fn train_model(
     dataset: &Dataset,
     config: &GptConfig,
     train_config: &TrainConfig,
     device: &Device,
+    initial_varmap: Option<&VarMap>,
 ) -> Result<(VarMap, Gpt)> {
-    let varmap = VarMap::new();
+    let varmap = match initial_varmap {
+        Some(varmap) => varmap.clone(),
+        None => VarMap::new(),
+    };
     let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
     let model = Gpt::new(vb, config)?;
 
