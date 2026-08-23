@@ -29,6 +29,7 @@ pub fn export_gguf(
     model_path: &Path,
     tokenizer: &Bpe,
     output_path: &Path,
+    context_length: usize,
 ) -> Result<()> {
     let file = std::fs::File::open(config_path)
         .with_context(|| format!("failed to open {}", config_path.display()))?;
@@ -42,29 +43,38 @@ pub fn export_gguf(
         .load(model_path)
         .with_context(|| format!("failed to load {}", model_path.display()))?;
 
-    let entries = collect_tensors(&varmap, &config)?;
+    let entries = collect_tensors(&varmap, &config, context_length)?;
 
     let mut output = std::fs::File::create(output_path)
         .with_context(|| format!("failed to create {}", output_path.display()))?;
-    write_gguf(&mut output, &config, tokenizer, &entries)?;
+    write_gguf(&mut output, &config, tokenizer, &entries, context_length)?;
     Ok(())
 }
 
-fn collect_tensors(varmap: &VarMap, config: &GptConfig) -> Result<Vec<TensorEntry>> {
+fn collect_tensors(
+    varmap: &VarMap,
+    config: &GptConfig,
+    context_length: usize,
+) -> Result<Vec<TensorEntry>> {
     let mut entries = Vec::new();
     let data = varmap.data().lock().unwrap();
     for (name, var) in data.iter() {
-        let Some((gguf_name, shape)) = map_tensor_name(name, config) else {
+        let Some((gguf_name, shape)) = map_tensor_name(name, config, context_length) else {
             continue;
         };
         let tensor = var.as_tensor();
-        let values = tensor
+        let mut values = tensor
             .to_dtype(DType::F32)
             .with_context(|| format!("failed to cast tensor {name} to f32"))?
             .flatten_all()
             .with_context(|| format!("failed to flatten tensor {name}"))?
             .to_vec1::<f32>()
             .with_context(|| format!("failed to read tensor {name}"))?;
+
+        if name == "wpe.weight" && context_length > config.block_size {
+            pad_position_embeddings(&mut values, config, context_length);
+        }
+
         entries.push(TensorEntry {
             name: gguf_name,
             shape,
@@ -75,11 +85,23 @@ fn collect_tensors(varmap: &VarMap, config: &GptConfig) -> Result<Vec<TensorEntr
     Ok(entries)
 }
 
-fn map_tensor_name(name: &str, config: &GptConfig) -> Option<(String, Vec<u64>)> {
+fn pad_position_embeddings(values: &mut Vec<f32>, config: &GptConfig, context_length: usize) {
+    let n_embd = config.n_embd;
+    let last_row = values[values.len() - n_embd..].to_vec();
+    for _ in 0..(context_length - config.block_size) {
+        values.extend_from_slice(&last_row);
+    }
+}
+
+fn map_tensor_name(
+    name: &str,
+    config: &GptConfig,
+    context_length: usize,
+) -> Option<(String, Vec<u64>)> {
     let n_embd = config.n_embd as u64;
     let n_ff = (4 * config.n_embd) as u64;
     let n_vocab = config.vocab_size as u64;
-    let n_ctx = config.block_size as u64;
+    let n_ctx = context_length as u64;
 
     match name {
         "wte.weight" => Some(("token_embd.weight".into(), vec![n_vocab, n_embd])),
@@ -133,6 +155,7 @@ fn write_gguf<W: Write + Seek>(
     config: &GptConfig,
     tokenizer: &Bpe,
     entries: &[TensorEntry],
+    context_length: usize,
 ) -> Result<()> {
     let kv_count = metadata_kv_count();
     writer.write_all(&GGUF_MAGIC.to_le_bytes())?;
@@ -140,7 +163,7 @@ fn write_gguf<W: Write + Seek>(
     writer.write_all(&(entries.len() as u64).to_le_bytes())?;
     writer.write_all(&(kv_count as u64).to_le_bytes())?;
 
-    write_metadata(writer, config, tokenizer)?;
+    write_metadata(writer, config, tokenizer, context_length)?;
     write_tensor_infos(writer, entries)?;
     write_tensor_data(writer, entries)?;
     Ok(())
@@ -150,11 +173,16 @@ fn metadata_kv_count() -> usize {
     18
 }
 
-fn write_metadata<W: Write>(writer: &mut W, config: &GptConfig, tokenizer: &Bpe) -> Result<()> {
+fn write_metadata<W: Write>(
+    writer: &mut W,
+    config: &GptConfig,
+    tokenizer: &Bpe,
+    context_length: usize,
+) -> Result<()> {
     write_string_value(writer, "general.architecture", "gpt2")?;
     write_string_value(writer, "general.name", "grungegpt")?;
     write_u32_value(writer, "general.file_type", 0)?;
-    write_u32_value(writer, "gpt2.context_length", config.block_size as u32)?;
+    write_u32_value(writer, "gpt2.context_length", context_length as u32)?;
     write_u32_value(writer, "gpt2.embedding_length", config.n_embd as u32)?;
     write_u32_value(writer, "gpt2.block_count", config.n_layer as u32)?;
     write_u32_value(

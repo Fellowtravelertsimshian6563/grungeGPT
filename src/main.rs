@@ -133,6 +133,10 @@ struct ExportGgufArgs {
     /// Output GGUF file.
     #[arg(long, default_value = "grungegpt.gguf")]
     output: PathBuf,
+
+    /// Context length advertised in the GGUF. Position embeddings are padded to this size.
+    #[arg(long, default_value_t = 4096)]
+    context: usize,
 }
 
 #[derive(Args)]
@@ -292,7 +296,13 @@ fn run_go(args: GoArgs) -> Result<()> {
 
 fn run_export_gguf(args: ExportGgufArgs) -> Result<()> {
     let tokenizer = Bpe::load(&args.tokenizer)?;
-    export_gguf(&args.config, &args.checkpoint, &tokenizer, &args.output)?;
+    export_gguf(
+        &args.config,
+        &args.checkpoint,
+        &tokenizer,
+        &args.output,
+        args.context,
+    )?;
     println!("exported GGUF model to {}", args.output.display());
     Ok(())
 }
