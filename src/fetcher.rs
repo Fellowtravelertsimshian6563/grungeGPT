@@ -25,6 +25,8 @@ use std::thread;
 use std::time::Duration;
 
 /// Artists and directory slugs used by the lyrics downloader.
+///
+/// Each entry is `(display name, directory slug)`.
 pub const ARTISTS: &[(&str, &str)] = &[
     ("Nirvana", "nirvana"),
     ("Alice in Chains", "alice-in-chains"),
@@ -42,6 +44,24 @@ pub const ARTISTS: &[(&str, &str)] = &[
 ];
 
 /// Download lyrics for all configured artists into `out_dir`.
+///
+/// # Parameters
+///
+/// - `out_dir`: destination directory for artist subdirectories.
+/// - `max_songs`: maximum number of lyrics to save per artist.
+///
+/// # Returns
+///
+/// A list of paths to the created lyric files.
+///
+/// # Errors
+///
+/// Returns an error when an output directory cannot be created.
+///
+/// # Behavior
+///
+/// For each artist, song titles are fetched from the iTunes Search API and
+/// lyrics are fetched from lyrics.ovh. Non-lyric noise titles are filtered out.
 pub fn fetch_lyrics(out_dir: &Path, max_songs: usize) -> Result<Vec<PathBuf>> {
     let mut written = Vec::new();
     for (artist, slug) in ARTISTS {
@@ -85,6 +105,19 @@ pub fn fetch_lyrics(out_dir: &Path, max_songs: usize) -> Result<Vec<PathBuf>> {
     Ok(written)
 }
 
+/// Fetch candidate song titles for an artist from the iTunes Search API.
+///
+/// # Parameters
+///
+/// - `artist`: artist name to search for.
+///
+/// # Returns
+///
+/// A deduplicated list of title strings with noise titles removed.
+///
+/// # Errors
+///
+/// Returns an error when the iTunes request fails or the response is invalid.
 fn fetch_titles(artist: &str) -> Result<Vec<String>> {
     let encoded = urlencoding::encode(artist);
     let url = format!("https://itunes.apple.com/search?term={encoded}&entity=song&limit=200");
@@ -114,6 +147,17 @@ fn fetch_titles(artist: &str) -> Result<Vec<String>> {
     Ok(titles)
 }
 
+/// Fetch lyrics for a specific artist and title from lyrics.ovh.
+///
+/// # Parameters
+///
+/// - `artist`: artist name.
+/// - `title`: song title.
+///
+/// # Returns
+///
+/// `Ok(Some(lyrics))` when found, `Ok(None)` when the API returns 404, and an
+/// error for other failures.
 fn fetch_lyrics_for(artist: &str, title: &str) -> Result<Option<String>> {
     let artist = urlencoding::encode(artist);
     let title = urlencoding::encode(title);
@@ -131,6 +175,16 @@ fn fetch_lyrics_for(artist: &str, title: &str) -> Result<Option<String>> {
     }
 }
 
+/// Return true when a title looks like a non-lyric release variant.
+///
+/// # Parameters
+///
+/// - `title`: song title to inspect.
+///
+/// # Returns
+///
+/// `true` when the title contains noise markers like "live", "remaster", or
+/// "instrumental".
 fn is_noise(title: &str) -> bool {
     let lower = title.to_lowercase();
     const NOISE: &[&str] = &[

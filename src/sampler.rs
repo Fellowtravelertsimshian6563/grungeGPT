@@ -40,7 +40,27 @@ pub struct GenerateConfig {
 
 /// Generate text from a trained model using the configured sampler.
 ///
-/// Generation stops when the model emits `<eos>` or `max_tokens` is reached.
+/// # Parameters
+///
+/// - `model`: trained GPT model.
+/// - `tokenizer`: tokenizer used for encoding and decoding.
+/// - `prompt`: seed text for generation.
+/// - `config`: sampling options.
+/// - `device`: device for the model tensors.
+///
+/// # Returns
+///
+/// Generated text including the prompt.
+///
+/// # Errors
+///
+/// Returns an error when tensors cannot be created or the forward pass fails.
+///
+/// # Behavior
+///
+/// The prompt is tokenized and repeatedly fed to the model. At each step the
+/// next token is sampled with temperature and top-k. Generation stops when the
+/// `<eos>` token is sampled or `max_tokens` is reached.
 /// See <https://arxiv.org/abs/1904.09751> for the degeneracy problems that
 /// temperature and top-k are designed to mitigate.
 pub fn generate(
@@ -85,6 +105,22 @@ pub fn generate(
     Ok(tokenizer.decode_ids(&output))
 }
 
+/// Sample the next token id from logits with temperature and top-k.
+///
+/// # Parameters
+///
+/// - `logits`: vector of raw logits for the last token.
+/// - `temperature`: softmax temperature. `<= 0.0` selects greedy argmax.
+/// - `top_k`: optional number of highest-scoring tokens to keep.
+/// - `rng`: random number generator for sampling.
+///
+/// # Returns
+///
+/// The sampled token id.
+///
+/// # Errors
+///
+/// Returns an error when logits cannot be read from the tensor.
 fn sample_token(
     logits: &Tensor,
     temperature: f64,
@@ -133,6 +169,15 @@ fn sample_token(
     Ok(argmax(&logits) as u32)
 }
 
+/// Return the index of the largest value.
+///
+/// # Parameters
+///
+/// - `values`: slice of float scores.
+///
+/// # Returns
+///
+/// Index of the maximum value, or `0` for an empty slice.
 fn argmax(values: &[f32]) -> usize {
     values
         .iter()

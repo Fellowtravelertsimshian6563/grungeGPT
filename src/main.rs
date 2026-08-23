@@ -28,6 +28,12 @@ use grungegpt::trainer::{TrainConfig, train_model};
 use std::path::PathBuf;
 
 /// Device selection for training and generation.
+///
+/// # Variants
+///
+/// - `Cpu`: always use the CPU.
+/// - `Cuda`: always use CUDA device 0.
+/// - `Auto`: use CUDA when available, otherwise CPU.
 #[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
 enum DeviceChoice {
     Cpu,
@@ -37,6 +43,15 @@ enum DeviceChoice {
 }
 
 impl DeviceChoice {
+    /// Resolve the choice into a Candle [`Device`].
+    ///
+    /// # Returns
+    ///
+    /// The selected device.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when CUDA is requested but unavailable.
     fn resolve(self) -> Result<Device> {
         match self {
             Self::Cpu => Ok(Device::Cpu),
@@ -76,6 +91,7 @@ enum Command {
     Export(ExportGgufArgs),
 }
 
+/// Arguments for the `tokenizer` command.
 #[derive(Args)]
 struct TokenizerArgs {
     /// Directory containing .txt lyric files.
@@ -91,6 +107,7 @@ struct TokenizerArgs {
     output: PathBuf,
 }
 
+/// Arguments for the `go` command.
 #[derive(Args)]
 struct GoArgs {
     /// Directory containing .txt lyric files.
@@ -122,6 +139,7 @@ struct GoArgs {
     device: DeviceChoice,
 }
 
+/// Arguments for the `fetch-lyrics` command.
 #[derive(Args)]
 struct FetchLyricsArgs {
     /// Directory where artist lyric folders are written.
@@ -133,6 +151,7 @@ struct FetchLyricsArgs {
     max_songs: usize,
 }
 
+/// Arguments for the `export-gguf` command.
 #[derive(Args)]
 struct ExportGgufArgs {
     /// Model configuration file.
@@ -156,6 +175,7 @@ struct ExportGgufArgs {
     context: usize,
 }
 
+/// Arguments for the `train` command.
 #[derive(Args)]
 struct TrainArgs {
     /// Directory containing .txt lyric files.
@@ -223,6 +243,7 @@ struct TrainArgs {
     device: DeviceChoice,
 }
 
+/// Arguments for the `generate` command.
 #[derive(Args)]
 struct GenerateArgs {
     /// Model configuration file.
@@ -274,6 +295,7 @@ fn main() -> Result<()> {
     }
 }
 
+/// Run the `go` pipeline: fetch lyrics if needed, train, and generate.
 fn run_go(args: GoArgs) -> Result<()> {
     if lyrics_file_count(&args.data)? <= 1 {
         println!("no lyrics found, downloading now");
@@ -316,6 +338,7 @@ fn run_go(args: GoArgs) -> Result<()> {
     Ok(())
 }
 
+/// Export a checkpoint to GGUF for Ollama.
 fn run_export_gguf(args: ExportGgufArgs) -> Result<()> {
     let tokenizer = Bpe::load(&args.tokenizer)?;
     export_gguf(
@@ -329,12 +352,14 @@ fn run_export_gguf(args: ExportGgufArgs) -> Result<()> {
     Ok(())
 }
 
+/// Download lyrics for all configured artists.
 fn run_fetch_lyrics(args: FetchLyricsArgs) -> Result<()> {
     let written = fetch_lyrics(&args.out_dir, args.max_songs)?;
     println!("downloaded lyrics for {} artists", written.len());
     Ok(())
 }
 
+/// Train and save a BPE tokenizer.
 fn run_tokenizer(args: TokenizerArgs) -> Result<()> {
     let texts = load_lyrics_dir(&args.data)?;
     let tokenizer = Bpe::train(&texts, args.merges);
@@ -347,6 +372,7 @@ fn run_tokenizer(args: TokenizerArgs) -> Result<()> {
     Ok(())
 }
 
+/// Train a GPT model, optionally resuming from an existing checkpoint.
 fn run_train(args: TrainArgs) -> Result<()> {
     let texts = load_lyrics_dir(&args.data)?;
     let tokenizer = match &args.tokenizer {
@@ -410,6 +436,7 @@ fn run_train(args: TrainArgs) -> Result<()> {
     Ok(())
 }
 
+/// Generate text from a trained checkpoint.
 fn run_generate(args: GenerateArgs) -> Result<()> {
     let tokenizer = Bpe::load(&args.tokenizer)?;
     let device = args.device.resolve()?;

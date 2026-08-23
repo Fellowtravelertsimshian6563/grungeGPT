@@ -30,6 +30,13 @@ use rayon::prelude::*;
 use std::path::Path;
 
 /// Fixed-length training sequences built from tokenized lyric files.
+///
+/// # Fields
+///
+/// - `sequences`: each entry is `block_size + 1` token ids. The first
+///   `block_size` tokens are the model input and the shifted-by-one window is
+///   the training target.
+/// - `block_size`: number of input tokens per training step.
 #[derive(Debug, Clone)]
 pub struct Dataset {
     sequences: Vec<Vec<u32>>,
@@ -37,7 +44,27 @@ pub struct Dataset {
 }
 
 impl Dataset {
-    /// Build fixed-length sequences from texts, prefixing each with the BOS token and appending EOS.
+    /// Build fixed-length sequences from texts, prefixing each with BOS and appending EOS.
+    ///
+    /// # Parameters
+    ///
+    /// - `texts`: raw documents to tokenize.
+    /// - `tokenizer`: tokenizer used to convert text to ids.
+    /// - `block_size`: number of input tokens per sequence.
+    ///
+    /// # Returns
+    ///
+    /// A [`Dataset`] containing at least one sequence.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no training sequences can be built.
+    ///
+    /// # Behavior
+    ///
+    /// Each document is tokenized and an `<eos>` id is appended. The ids are
+    /// split into `block_size` chunks, each prefixed with `<s>` and padded with
+    /// `<eos>` when the final chunk is short.
     pub fn from_texts(texts: &[String], tokenizer: &Bpe, block_size: usize) -> Result<Self> {
         let seq_len = block_size + 1;
         let bos = tokenizer.bos_id();
@@ -67,16 +94,44 @@ impl Dataset {
     }
 
     /// Number of tokens in each training sequence.
+    ///
+    /// # Returns
+    ///
+    /// The `block_size` used when the dataset was built.
     pub fn block_size(&self) -> usize {
         self.block_size
     }
 
     /// Number of fixed-length sequences in the dataset.
+    ///
+    /// # Returns
+    ///
+    /// Total sequence count available for sampling.
     pub fn sequence_count(&self) -> usize {
         self.sequences.len()
     }
 
     /// Sample a random batch of input and target tensors on the given device.
+    ///
+    /// # Parameters
+    ///
+    /// - `rng`: random number generator used to pick sequences.
+    /// - `batch_size`: number of sequences to sample.
+    /// - `device`: target device for the tensors.
+    ///
+    /// # Returns
+    ///
+    /// `(input, target)` tensors, each shaped `(batch_size, block_size)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the tensors cannot be created on the device.
+    ///
+    /// # Behavior
+    ///
+    /// For every sampled sequence, the first `block_size` ids become the input
+    /// and the ids shifted by one become the target. This shift is what makes
+    /// the model learn next-token prediction.
     pub fn sample_batch(
         &self,
         rng: &mut StdRng,
@@ -103,6 +158,19 @@ impl Dataset {
 }
 
 /// Read every `.txt` file under a directory and normalize the text.
+///
+/// # Parameters
+///
+/// - `path`: root directory to scan recursively.
+///
+/// # Returns
+///
+/// A vector of normalized document strings, one per `.txt` file.
+///
+/// # Errors
+///
+/// Returns an error when the directory is unreadable or contains no `.txt`
+/// files.
 pub fn load_lyrics_dir(path: &Path) -> Result<Vec<String>> {
     let mut files = Vec::new();
     collect_txt_files(path, &mut files)?;
@@ -124,12 +192,34 @@ pub fn load_lyrics_dir(path: &Path) -> Result<Vec<String>> {
 }
 
 /// Count `.txt` files under a directory, recursively.
+///
+/// # Parameters
+///
+/// - `path`: root directory to scan.
+///
+/// # Returns
+///
+/// The number of `.txt` files found.
+///
+/// # Errors
+///
+/// Returns an error when the directory cannot be read.
 pub fn lyrics_file_count(path: &Path) -> Result<usize> {
     let mut files = Vec::new();
     collect_txt_files(path, &mut files)?;
     Ok(files.len())
 }
 
+/// Recursively collect `.txt` file paths under a directory.
+///
+/// # Parameters
+///
+/// - `path`: directory to scan.
+/// - `files`: mutable vector that receives matching file paths.
+///
+/// # Errors
+///
+/// Returns an error when a directory entry cannot be read.
 fn collect_txt_files(path: &Path, files: &mut Vec<std::path::PathBuf>) -> Result<()> {
     let entries = std::fs::read_dir(path)
         .with_context(|| format!("failed to read directory {}", path.display()))?;
@@ -153,6 +243,16 @@ fn collect_txt_files(path: &Path, files: &mut Vec<std::path::PathBuf>) -> Result
     Ok(())
 }
 
+/// Normalize line endings and trim trailing whitespace.
+///
+/// # Parameters
+///
+/// - `raw`: raw file content.
+///
+/// # Returns
+///
+/// Normalized text with `\r\n` and `\r` converted to `\n`, trailing spaces
+/// removed per line, and surrounding blank lines trimmed.
 fn normalize_text(raw: &str) -> String {
     raw.replace("\r\n", "\n")
         .replace('\r', "\n")

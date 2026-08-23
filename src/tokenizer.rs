@@ -38,15 +38,40 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::LazyLock;
 
+/// Beginning-of-sequence token id 0 in the vocabulary.
 pub const BOS_TOKEN: &str = "<s>";
+
+/// End-of-sequence token id 1 in the vocabulary.
+///
+/// The model is trained to emit this token at the end of every document.
+/// Generation stops when this token is sampled.
 pub const EOS_TOKEN: &str = "<eos>";
+
+/// Unknown token fallback id 2 in the vocabulary.
+///
+/// Any byte sequence that is not in the vocabulary is mapped to this token
+/// during encoding.
 pub const UNK_TOKEN: &str = "<unk>";
 
 /// A single BPE merge rule: `(left, right)` becomes `merged`.
+///
+/// # Fields
+///
+/// - `left`: first symbol in the pair.
+/// - `right`: second symbol in the pair.
+/// - `merged`: the new symbol created by concatenating `left` and `right`.
+///
+/// # Example
+///
+/// `("a", "b") -> "ab"` means that every adjacent `"a" "b"` in a word is
+/// replaced with the single token `"ab"` during encoding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BpeTrio {
+    /// First symbol of the merge pair.
     pub left: String,
+    /// Second symbol of the merge pair.
     pub right: String,
+    /// Concatenated replacement symbol.
     pub merged: String,
 }
 
@@ -98,12 +123,27 @@ struct SymbolWord {
 }
 
 /// A byte pair encoding tokenizer compatible with llama.cpp GPT-2 tokenizers.
+///
+/// # Design
+///
+/// - `merges` is the ordered list of learned BPE merge rules.
+/// - `vocab` maps token ids to token strings in insertion order.
+/// - `ids` is a reverse index from token string to id, rebuilt after loading.
+/// - `bpe_ranks` maps each merge pair to its rank, so encoding can merge the
+///   lowest-rank pair first.
+///
+/// The `ids` and `bpe_ranks` maps are not serialized; they are rebuilt from the
+/// serialized `vocab` and `merges` in [`Bpe::rebuild_index`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Bpe {
+    /// Ordered BPE merge rules learned during training.
     merges: Vec<BpeTrio>,
+    /// Vocabulary tokens in id order.
     vocab: Vec<String>,
+    /// Reverse lookup from token string to id.
     #[serde(skip)]
     ids: HashMap<String, u32>,
+    /// Merge pair to rank for fast encoding.
     #[serde(skip)]
     bpe_ranks: HashMap<(String, String), usize>,
 }
@@ -111,9 +151,26 @@ pub struct Bpe {
 impl Bpe {
     /// Train a byte level BPE tokenizer from a set of texts.
     ///
-    /// The trainer counts word frequencies, builds initial character vocabularies,
-    /// and repeatedly merges the most frequent adjacent pair. See the BPE paper
-    /// <https://arxiv.org/abs/1508.07909>.
+    /// # Parameters
+    ///
+    /// - `texts`: slice of raw documents used to count word frequencies.
+    /// - `num_merges`: maximum number of BPE merge rules to learn.
+    ///
+    /// # Returns
+    ///
+    /// A fully built [`Bpe`] with vocab and merge ranks ready for encoding.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. Pre-tokenize every document into GPT-2 style byte encoded words.
+    /// 2. Count how often each unique word appears.
+    /// 3. Seed the vocabulary with `<s>`, `<eos>`, `<unk>`, and every character
+    ///    that appears in the corpus.
+    /// 4. Count adjacent symbol pairs weighted by word frequency.
+    /// 5. Repeatedly find the most frequent pair, add it to the vocabulary, and
+    ///    merge every non-overlapping occurrence in the affected words.
+    ///
+    /// See the BPE paper <https://arxiv.org/abs/1508.07909>.
     pub fn train(texts: &[String], num_merges: usize) -> Self {
         let mut word_freq: HashMap<String, usize> = HashMap::new();
         for text in texts {
@@ -245,8 +302,19 @@ impl Bpe {
 
     /// Encode text into byte level token strings.
     ///
-    /// Each pre-tokenized word is split into characters and merged using the
-    /// learned BPE ranks. See Karpathy's tokenizer video
+    /// # Parameters
+    ///
+    /// - `text`: raw UTF-8 input text.
+    ///
+    /// # Returns
+    ///
+    /// A vector of token strings from the vocabulary.
+    ///
+    /// # Behavior
+    ///
+    /// Each pre-tokenized word is split into characters and repeatedly merged
+    /// using the lowest-rank BPE pair first, matching the standard GPT-2 BPE
+    /// decoding order. See Karpathy's tokenizer video
     /// <https://www.youtube.com/watch?v=zduSFxRajkE>.
     pub fn encode(&self, text: &str) -> Vec<String> {
         let mut tokens = Vec::new();
@@ -275,6 +343,15 @@ impl Bpe {
     }
 
     /// Encode text into token ids.
+    ///
+    /// # Parameters
+    ///
+    /// - `text`: raw UTF-8 input text.
+    ///
+    /// # Returns
+    ///
+    /// A vector of vocabulary ids. Unknown tokens are replaced with the
+    /// `<unk>` id.
     pub fn encode_ids(&self, text: &str) -> Vec<u32> {
         let unk = self.id(UNK_TOKEN).unwrap_or(0);
         self.encode(text)
@@ -285,14 +362,33 @@ impl Bpe {
 
     /// Decode byte level token strings back into text.
     ///
-    /// Tokens are concatenated and byte-decoded back to UTF-8. See the GPT-2
-    /// paper's byte encoding appendix <https://d4mucfpksywv.cloudfront.net/better-language-models/language-models.pdf>.
+    /// # Parameters
+    ///
+    /// - `tokens`: slice of token strings produced by [`Bpe::encode`].
+    ///
+    /// # Returns
+    ///
+    /// The original UTF-8 text with spaces and newlines restored.
+    ///
+    /// # Behavior
+    ///
+    /// Tokens are concatenated in order, then every byte-encoded unicode
+    /// character is mapped back to its original byte. See the GPT-2 paper's
+    /// byte encoding appendix <https://d4mucfpksywv.cloudfront.net/better-language-models/language-models.pdf>.
     pub fn decode(&self, tokens: &[String]) -> String {
         let encoded: String = tokens.concat();
         byte_decode(&encoded)
     }
 
     /// Decode token ids back into text.
+    ///
+    /// # Parameters
+    ///
+    /// - `ids`: slice of vocabulary ids produced by [`Bpe::encode_ids`].
+    ///
+    /// # Returns
+    ///
+    /// The decoded UTF-8 text. Unknown ids are rendered as `<unk>`.
     pub fn decode_ids(&self, ids: &[u32]) -> String {
         let tokens: Vec<String> = ids
             .iter()
@@ -302,41 +398,81 @@ impl Bpe {
     }
 
     /// Number of tokens in the vocabulary.
+    ///
+    /// # Returns
+    ///
+    /// The total count of special tokens, characters, and merged BPE symbols.
     pub fn vocab_size(&self) -> usize {
         self.vocab.len()
     }
 
     /// All vocabulary tokens in id order.
+    ///
+    /// # Returns
+    ///
+    /// A slice where `index` is the token id and the value is the token string.
     pub fn tokens(&self) -> &[String] {
         &self.vocab
     }
 
     /// Learned BPE merge rules.
+    ///
+    /// # Returns
+    ///
+    /// The ordered list of merge rules used by the tokenizer.
     pub fn merges(&self) -> &[BpeTrio] {
         &self.merges
     }
 
     /// Id of the beginning of sequence token.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `<s>` token is missing from the vocabulary.
     pub fn bos_id(&self) -> u32 {
         self.id(BOS_TOKEN).expect("BOS token must be in vocab")
     }
 
     /// Id of the end of sequence token.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `<eos>` token is missing from the vocabulary.
     pub fn eos_id(&self) -> u32 {
         self.id(EOS_TOKEN).expect("EOS token must be in vocab")
     }
 
     /// Id of the unknown token.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `<unk>` token is missing from the vocabulary.
     pub fn unk_id(&self) -> u32 {
         self.id(UNK_TOKEN).expect("UNK token must be in vocab")
     }
 
     /// Look up the token string for an id.
+    ///
+    /// # Parameters
+    ///
+    /// - `id`: vocabulary id.
+    ///
+    /// # Returns
+    ///
+    /// `Some(token)` when the id is valid, `None` when it is out of range.
     pub fn id_to_token(&self, id: u32) -> Option<&str> {
         self.token(id)
     }
 
     /// Save the tokenizer as JSON.
+    ///
+    /// # Parameters
+    ///
+    /// - `path`: destination file path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file cannot be created or written.
     pub fn save(&self, path: &Path) -> Result<()> {
         let file = std::fs::File::create(path)
             .with_context(|| format!("failed to create tokenizer file {}", path.display()))?;
@@ -346,6 +482,18 @@ impl Bpe {
     }
 
     /// Load a tokenizer from JSON.
+    ///
+    /// # Parameters
+    ///
+    /// - `path`: source file path written by [`Bpe::save`].
+    ///
+    /// # Returns
+    ///
+    /// A tokenizer with rebuilt id and rank indexes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file cannot be opened or parsed.
     pub fn load(path: &Path) -> Result<Self> {
         let file = std::fs::File::open(path)
             .with_context(|| format!("failed to open tokenizer file {}", path.display()))?;
@@ -355,6 +503,11 @@ impl Bpe {
         Ok(tokenizer)
     }
 
+    /// Rebuild the in-memory id and rank indexes after deserialization.
+    ///
+    /// `ids` maps token strings to ids. `bpe_ranks` maps merge pairs to their
+    /// position in the merge list so encoding can always merge the lowest rank
+    /// pair first.
     fn rebuild_index(&mut self) {
         self.ids = self
             .vocab
@@ -370,18 +523,45 @@ impl Bpe {
             .collect();
     }
 
+    /// Look up the vocabulary id for a token string.
+    ///
+    /// # Parameters
+    ///
+    /// - `token`: token string.
+    ///
+    /// # Returns
+    ///
+    /// `Some(id)` when the token is in the vocabulary, `None` otherwise.
     fn id(&self, token: &str) -> Option<u32> {
         self.ids.get(token).copied()
     }
 
+    /// Look up the token string for a vocabulary id.
+    ///
+    /// # Parameters
+    ///
+    /// - `id`: vocabulary id.
+    ///
+    /// # Returns
+    ///
+    /// `Some(token)` when the id is valid, `None` when it is out of range.
     fn token(&self, id: u32) -> Option<&str> {
         self.vocab.get(id as usize).map(String::as_str)
     }
 
     /// Split text into byte encoded words.
     ///
-    /// A single space is kept as the prefix of every word that follows whitespace,
-    /// matching the GPT-2 pre-tokenizer. Newlines become standalone words.
+    /// A single space is kept as the prefix of every word that follows
+    /// whitespace, matching the GPT-2 pre-tokenizer. Newlines become standalone
+    /// words.
+    ///
+    /// # Parameters
+    ///
+    /// - `text`: raw UTF-8 input text.
+    ///
+    /// # Returns
+    ///
+    /// A vector of byte encoded word strings suitable for BPE tokenization.
     fn pretokenize(text: &str) -> Vec<String> {
         let mut words = Vec::new();
         let mut current = String::new();
@@ -420,11 +600,29 @@ impl Bpe {
         words
     }
 
+    /// Split a byte encoded word into single-character symbols.
+    ///
+    /// # Parameters
+    ///
+    /// - `word`: byte encoded word string.
+    ///
+    /// # Returns
+    ///
+    /// A vector of single-character token strings ready for BPE merging.
     fn tokenize(word: &str) -> Vec<String> {
         word.chars().map(|c| c.to_string()).collect()
     }
 }
 
+/// Encode a UTF-8 string into GPT-2 byte encoded unicode.
+///
+/// # Parameters
+///
+/// - `text`: raw UTF-8 input text.
+///
+/// # Returns
+///
+/// A string where every byte is represented by its byte-to-unicode character.
 fn byte_encode(text: &str) -> String {
     text.as_bytes()
         .iter()
@@ -432,6 +630,15 @@ fn byte_encode(text: &str) -> String {
         .collect()
 }
 
+/// Decode a GPT-2 byte encoded unicode string back to UTF-8.
+///
+/// # Parameters
+///
+/// - `encoded`: byte encoded string produced by [`byte_encode`].
+///
+/// # Returns
+///
+/// The original UTF-8 text. Invalid byte sequences are replaced lossily.
 fn byte_decode(encoded: &str) -> String {
     let bytes: Vec<u8> = encoded
         .chars()

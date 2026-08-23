@@ -46,8 +46,29 @@ pub struct TrainConfig {
 
 /// Train a GPT model on a dataset and return the weights and model.
 ///
-/// Pass `initial_varmap` to continue from an existing checkpoint. The optimizer
-/// state starts fresh, but the model weights are preserved.
+/// # Parameters
+///
+/// - `dataset`: training dataset with fixed-length sequences.
+/// - `config`: model hyperparameters.
+/// - `train_config`: optimizer and loop settings.
+/// - `device`: device for model and tensors.
+/// - `initial_varmap`: optional existing weights to continue training from.
+///
+/// # Returns
+///
+/// `(varmap, model)` after `train_config.steps` optimizer steps.
+///
+/// # Errors
+///
+/// Returns an error when the model cannot be built, a batch cannot be sampled,
+/// or a forward/backward step fails.
+///
+/// # Behavior
+///
+/// For every step, a random batch is sampled, logits are computed, cross-entropy
+/// loss is measured against the shifted targets, and AdamW updates the weights.
+/// When `initial_varmap` is provided, the model weights are preserved but the
+/// optimizer state starts fresh.
 pub fn train_model(
     dataset: &Dataset,
     config: &GptConfig,

@@ -41,13 +41,35 @@ const TYPE_STRING: u32 = 8;
 const TYPE_ARRAY: u32 = 9;
 const TYPE_F32_TENSOR: u32 = 0;
 
+/// One tensor in the GGUF file.
 struct TensorEntry {
+    /// GGUF tensor name, e.g. `token_embd.weight`.
     name: String,
+    /// Tensor dimensions in GGUF order.
     shape: Vec<u64>,
+    /// Flattened f32 weights.
     data: Vec<f32>,
 }
 
 /// Export a trained checkpoint and tokenizer to a GPT-2 architecture GGUF file.
+///
+/// # Parameters
+///
+/// - `config_path`: path to `config.json`.
+/// - `model_path`: path to `model.safetensors`.
+/// - `tokenizer`: tokenizer used to write GGUF tokenizer metadata.
+/// - `output_path`: destination `.gguf` file.
+/// - `context_length`: advertised context length. Position embeddings are padded
+///   when this is larger than the training `block_size`.
+///
+/// # Returns
+///
+/// `Ok(())` when the file is written successfully.
+///
+/// # Errors
+///
+/// Returns an error when config or weights cannot be read, or when the GGUF
+/// cannot be written.
 ///
 /// The exported file can be loaded by llama.cpp or served by Ollama. See the
 /// GGUF reference in llama.cpp <https://github.com/ggerganov/llama.cpp>.
@@ -78,6 +100,17 @@ pub fn export_gguf(
     Ok(())
 }
 
+/// Collect all model weights into GGUF tensor entries with mapped names.
+///
+/// # Parameters
+///
+/// - `varmap`: trained variable map.
+/// - `config`: model hyperparameters.
+/// - `context_length`: context length for padded position embeddings.
+///
+/// # Returns
+///
+/// A sorted vector of [`TensorEntry`] for every weight accepted by llama.cpp.
 fn collect_tensors(
     varmap: &VarMap,
     config: &GptConfig,
@@ -112,6 +145,13 @@ fn collect_tensors(
     Ok(entries)
 }
 
+/// Repeat the last learned position embedding row to reach `context_length`.
+///
+/// # Parameters
+///
+/// - `values`: flattened position embedding weights.
+/// - `config`: model hyperparameters.
+/// - `context_length`: target number of position rows.
 fn pad_position_embeddings(values: &mut Vec<f32>, config: &GptConfig, context_length: usize) {
     let n_embd = config.n_embd;
     let last_row = values[values.len() - n_embd..].to_vec();
@@ -120,6 +160,18 @@ fn pad_position_embeddings(values: &mut Vec<f32>, config: &GptConfig, context_le
     }
 }
 
+/// Map a Candle parameter name to the llama.cpp GPT-2 GGUF name and shape.
+///
+/// # Parameters
+///
+/// - `name`: Candle variable name from the VarMap.
+/// - `config`: model hyperparameters.
+/// - `context_length`: context length used for position embeddings.
+///
+/// # Returns
+///
+/// `Some((gguf_name, shape))` when the weight should be exported, `None` when
+/// it should be skipped.
 fn map_tensor_name(
     name: &str,
     config: &GptConfig,
@@ -167,6 +219,19 @@ fn map_tensor_name(
     }
 }
 
+/// Write the complete GGUF header, metadata, tensor infos, and tensor data.
+///
+/// # Parameters
+///
+/// - `writer`: seekable output writer.
+/// - `config`: model hyperparameters.
+/// - `tokenizer`: tokenizer metadata source.
+/// - `entries`: tensor entries to serialize.
+/// - `context_length`: context length advertised in metadata.
+///
+/// # Errors
+///
+/// Returns an error on any write failure.
 fn write_gguf<W: Write + Seek>(
     writer: &mut W,
     config: &GptConfig,
@@ -190,6 +255,18 @@ fn metadata_kv_count() -> usize {
     18
 }
 
+/// Write GGUF metadata key-value pairs for a GPT-2 architecture model.
+///
+/// # Parameters
+///
+/// - `writer`: output writer.
+/// - `config`: model hyperparameters.
+/// - `tokenizer`: tokenizer used for token and merge metadata.
+/// - `context_length`: context length advertised to llama.cpp.
+///
+/// # Errors
+///
+/// Returns an error on any write failure.
 fn write_metadata<W: Write>(
     writer: &mut W,
     config: &GptConfig,
@@ -230,6 +307,16 @@ fn write_metadata<W: Write>(
     Ok(())
 }
 
+/// Write the tensor info table used to locate tensor data.
+///
+/// # Parameters
+///
+/// - `writer`: output writer.
+/// - `entries`: tensor entries with names, shapes, and data lengths.
+///
+/// # Errors
+///
+/// Returns an error on any write failure.
 fn write_tensor_infos<W: Write>(writer: &mut W, entries: &[TensorEntry]) -> Result<()> {
     let mut offset = 0u64;
     for entry in entries {
@@ -245,6 +332,16 @@ fn write_tensor_infos<W: Write>(writer: &mut W, entries: &[TensorEntry]) -> Resu
     Ok(())
 }
 
+/// Write aligned tensor data after the metadata section.
+///
+/// # Parameters
+///
+/// - `writer`: seekable output writer.
+/// - `entries`: tensor entries whose data will be serialized.
+///
+/// # Errors
+///
+/// Returns an error on any write failure.
 fn write_tensor_data<W: Write + Seek>(writer: &mut W, entries: &[TensorEntry]) -> Result<()> {
     let position = writer.stream_position()? as usize;
     let padding = aligned_size(position) - position;
@@ -265,10 +362,30 @@ fn write_tensor_data<W: Write + Seek>(writer: &mut W, entries: &[TensorEntry]) -
     Ok(())
 }
 
+/// Round a byte size up to the GGUF alignment boundary.
+///
+/// # Parameters
+///
+/// - `size`: raw byte count.
+///
+/// # Returns
+///
+/// The next multiple of `ALIGNMENT` at or after `size`.
 fn aligned_size(size: usize) -> usize {
     size.div_ceil(ALIGNMENT) * ALIGNMENT
 }
 
+/// Write a string typed GGUF metadata key-value pair.
+///
+/// # Parameters
+///
+/// - `writer`: output writer.
+/// - `key`: metadata key.
+/// - `value`: string value.
+///
+/// # Errors
+///
+/// Returns an error on any write failure.
 fn write_string_value<W: Write>(writer: &mut W, key: &str, value: &str) -> Result<()> {
     write_string(writer, key)?;
     writer.write_all(&TYPE_STRING.to_le_bytes())?;
@@ -276,6 +393,17 @@ fn write_string_value<W: Write>(writer: &mut W, key: &str, value: &str) -> Resul
     Ok(())
 }
 
+/// Write a uint32 typed GGUF metadata key-value pair.
+///
+/// # Parameters
+///
+/// - `writer`: output writer.
+/// - `key`: metadata key.
+/// - `value`: uint32 value.
+///
+/// # Errors
+///
+/// Returns an error on any write failure.
 fn write_u32_value<W: Write>(writer: &mut W, key: &str, value: u32) -> Result<()> {
     write_string(writer, key)?;
     writer.write_all(&TYPE_UINT32.to_le_bytes())?;
@@ -283,6 +411,17 @@ fn write_u32_value<W: Write>(writer: &mut W, key: &str, value: u32) -> Result<()
     Ok(())
 }
 
+/// Write a float32 typed GGUF metadata key-value pair.
+///
+/// # Parameters
+///
+/// - `writer`: output writer.
+/// - `key`: metadata key.
+/// - `value`: float32 value.
+///
+/// # Errors
+///
+/// Returns an error on any write failure.
 fn write_f32_value<W: Write>(writer: &mut W, key: &str, value: f32) -> Result<()> {
     write_string(writer, key)?;
     writer.write_all(&TYPE_FLOAT32.to_le_bytes())?;
@@ -290,6 +429,17 @@ fn write_f32_value<W: Write>(writer: &mut W, key: &str, value: f32) -> Result<()
     Ok(())
 }
 
+/// Write a boolean typed GGUF metadata key-value pair.
+///
+/// # Parameters
+///
+/// - `writer`: output writer.
+/// - `key`: metadata key.
+/// - `value`: boolean value.
+///
+/// # Errors
+///
+/// Returns an error on any write failure.
 fn write_bool_value<W: Write>(writer: &mut W, key: &str, value: bool) -> Result<()> {
     write_string(writer, key)?;
     writer.write_all(&TYPE_BOOL.to_le_bytes())?;
@@ -297,6 +447,17 @@ fn write_bool_value<W: Write>(writer: &mut W, key: &str, value: bool) -> Result<
     Ok(())
 }
 
+/// Write a string array typed GGUF metadata key-value pair.
+///
+/// # Parameters
+///
+/// - `writer`: output writer.
+/// - `key`: metadata key.
+/// - `values`: array of string values.
+///
+/// # Errors
+///
+/// Returns an error on any write failure.
 fn write_string_array<W: Write>(writer: &mut W, key: &str, values: &[String]) -> Result<()> {
     write_string(writer, key)?;
     writer.write_all(&TYPE_ARRAY.to_le_bytes())?;
@@ -308,6 +469,16 @@ fn write_string_array<W: Write>(writer: &mut W, key: &str, values: &[String]) ->
     Ok(())
 }
 
+/// Write a length-prefixed string in GGUF encoding.
+///
+/// # Parameters
+///
+/// - `writer`: output writer.
+/// - `value`: string to write.
+///
+/// # Errors
+///
+/// Returns an error on any write failure.
 fn write_string<W: Write>(writer: &mut W, value: &str) -> Result<()> {
     writer.write_all(&(value.len() as u64).to_le_bytes())?;
     writer.write_all(value.as_bytes())?;
