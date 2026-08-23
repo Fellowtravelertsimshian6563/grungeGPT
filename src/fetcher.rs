@@ -1,16 +1,20 @@
 //! # Lyrics fetcher
 //!
-//! Downloads song lyrics from the public lyrics.ovh API.
+//! A model is only as interesting as the data it was trained on. The fetcher
+//! exists so the project can bootstrap its own training corpus from the
+//! internet without asking the user to hand-collect files. It downloads song
+//! lyrics for a curated list of artists and saves them as plain text files
+//! under `data/lyrics`.
 //!
-//! This module exists so the project can bootstrap its own training data. The
-//! lyrics are cached as plain text files under `data/lyrics` and are not
-//! committed to git.
+//! Finding lyrics is a two-step problem. First the fetcher asks the iTunes
+//! Search API for candidate song titles for an artist. Then it asks lyrics.ovh
+//! for the actual lyrics of each title. Real-world song listings are full of
+//! noise, so the fetcher filters out titles containing words like "live",
+//! "remaster", "instrumental", or "karaoke", which are not useful training
+//! documents.
 //!
-//! ## API notes
-//!
-//! lyrics.ovh is a free, unofficial lyrics API. The fetcher requests one song
-//! per artist, filters out boilerplate noise, and saves each result as a text
-//! file.
+//! The lyrics are cached locally and are deliberately not committed to git,
+//! because licensing and repository size both matter.
 //!
 //! ## References
 //!

@@ -1,16 +1,23 @@
 //! # Trainer
 //!
-//! Runs the AdamW optimizer over the language modeling objective.
-//!
-//! ## What the model learns
+//! A random transformer is just a fancy random-number generator. The trainer is
+//! what turns it into a language model by repeatedly answering one question:
+//! how wrong was the model's prediction, and how should every weight change to
+//! be less wrong?
 //!
 //! For every input token the model outputs a probability distribution over the
-//! vocabulary. The loss is cross-entropy between those distributions and the
-//! actual next tokens. Minimizing this loss makes the model assign high
-//! probability to real text, which is how it learns language patterns.
+//! vocabulary. The loss is cross-entropy between that distribution and the one
+//! hot truth of the actual next token. Cross-entropy is low when the model is
+//! confident and correct, high when it is confident and wrong, and moderate
+//! when it is unsure. Minimizing it across millions of real sentences pushes
+//! the model to assign high probability to the kind of language that actually
+//! appears in the data.
 //!
-//! AdamW is a popular optimizer because it uses per-parameter adaptive learning
-//! rates and decouples weight decay from the gradient update.
+//! The gradients from that loss are handed to AdamW. Adam keeps a running
+//! estimate of the first and second moments of each gradient, which gives every
+//! parameter an adaptive learning rate, and its weight decay is decoupled from
+//! the gradient update. That small design choice, described in the AdamW paper,
+//! makes training more stable and generalizes better than plain Adam.
 //!
 //! ## References
 //!

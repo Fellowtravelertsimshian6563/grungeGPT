@@ -1,16 +1,39 @@
 //! # Sampler
 //!
-//! Generates text token by token using the trained model.
+//! A trained model is not a text generator by itself. It is a probability
+//! machine: give it a sequence of tokens and it returns a score for every token
+//! that could come next. The sampler turns those scores into actual words, one
+//! token at a time, and that is the moment a language model finally "speaks".
 //!
-//! ## Sampling methods
+//! The hard part is choosing how to speak. If we always take the most likely
+//! token, the model quickly falls into a loop and repeats itself. If we sample
+//! uniformly from the whole vocabulary, every word is equally likely and the
+//! output becomes pure noise. Real language lives somewhere in between: we want
+//! to stay close to the model's best guesses, but keep enough randomness to
+//! avoid boring repetition.
 //!
-//! - **Temperature** divides the logits before softmax. Low temperatures make
-//!   the output more deterministic, high temperatures make it more random.
-//! - **Top-k** keeps only the `k` most likely tokens and samples from those,
-//!   which avoids very unlikely tokens while retaining some randomness.
+//! Two simple but powerful ideas solve this:
 //!
-//! Generation stops when the model emits the `<eos>` token or reaches the
-//! requested token limit.
+//! - **Temperature** reshapes the probability distribution. Mathematically, we
+//!   divide the raw logits by a temperature `T` before softmax:
+//!
+//!   ```text
+//!   p(i) = exp(logit(i) / T) / sum_j exp(logit(j) / T)
+//!   ```
+//!
+//!   With `T < 1` the distribution becomes sharper and the model is more
+//!   decisive. With `T > 1` it becomes flatter and the model is more playful.
+//!   At `T = 0` (or any value below zero) we give up on randomness and greedily
+//!   pick the argmax.
+//!
+//! - **Top-k** cuts off the long tail of improbable tokens. We keep only the
+//!   `k` highest scoring tokens and redistribute probability among them. This
+//!   prevents the model from occasionally producing a bizarre token that it
+//!   only barely considered.
+//!
+//! Generation runs in a loop: sample one token, append it to the context, feed
+//! the context back into the model, and repeat. The loop ends when the model
+//! emits the special `<eos>` token or when we hit the requested token limit.
 //!
 //! ## References
 //!
@@ -39,6 +62,12 @@ pub struct GenerateConfig {
 }
 
 /// Generate text from a trained model using the configured sampler.
+///
+/// This is the moment everything comes together. The tokenizer turns your
+/// prompt into ids, the model scores every possible next token, the sampler
+/// picks one with a little randomness, and the loop feeds the new token back
+/// in. Each iteration extends the story by one word, and the loop keeps going
+/// until the model says `<eos>` or the token budget runs out.
 ///
 /// # Parameters
 ///

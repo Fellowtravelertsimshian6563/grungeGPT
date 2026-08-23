@@ -1,22 +1,27 @@
 //! # Tokenizer
 //!
-//! A byte pair encoding (BPE) tokenizer compatible with llama.cpp GPT-2
-//! tokenizers.
+//! Neural networks cannot read letters. They consume numbers, and ideally a
+//! small number of numbers per word, because every token the model has to think
+//! about costs memory and compute. The tokenizer is the bridge between human
+//! text and the integer ids a transformer can process.
 //!
-//! ## What is BPE?
+//! The simplest approach would be one id per character, but that makes every
+//! word many tokens long. The opposite extreme, one id per word, explodes the
+//! vocabulary and makes the model unable to handle words it has never seen.
+//! Byte pair encoding (BPE) finds a middle path: start with characters, then
+//! repeatedly merge the most frequent adjacent pair into a new symbol. After
+//! training, common pieces of words like `"ing"` or `" the"` become single
+//! tokens while rare words stay broken into smaller pieces. The model gets a
+//! compact vocabulary and still never sees an unknown word.
 //!
-//! BPE starts with single characters and repeatedly merges the most frequent
-//! adjacent pair of symbols into a new symbol. The result is a vocabulary that
-//! contains common subwords like `"ing"` or `" the"`, so the model does not
-//! have to learn every word from raw characters.
-//!
-//! ## Why byte level?
-//!
-//! GPT-2 maps every possible byte to a unicode character before BPE. This
-//! guarantees that any UTF-8 text can be tokenized without unknown tokens.
-//! Spaces become `Ġ`, newlines become `Ċ`, and all other bytes map to
-//! printable unicode. The same mapping is used by llama.cpp, which is why a
-//! model trained with this tokenizer can be exported to GGUF and run in Ollama.
+//! There is one more subtlety. Text contains every byte imaginable, and a
+//! tokenizer that only knows ASCII would choke on emoji or accented letters.
+//! GPT-2 solved this with byte level encoding: map every possible byte to a
+//! unicode character before BPE. Spaces become `Ġ`, newlines become `Ċ`, and
+//! every other byte maps to a printable character. This guarantees that any
+//! UTF-8 text can be tokenized without unknown tokens, and it is exactly the
+//! scheme llama.cpp uses, which is why a model trained with this tokenizer can
+//! be exported to GGUF and run in Ollama.
 //!
 //! ## References
 //!
@@ -24,13 +29,6 @@
 //! - GPT-2 paper: <https://d4mucfpksywv.cloudfront.net/better-language-models/language-models.pdf>
 //! - Karpathy, "Let's build the GPT Tokenizer": <https://www.youtube.com/watch?v=zduSFxRajkE>
 //! - Hugging Face tokenizer docs: <https://huggingface.co/docs/tokenizers>
-//!
-//! ## Files
-//!
-//! - `Bpe::train` learns merge rules from raw text.
-//! - `Bpe::encode` converts text to token strings.
-//! - `Bpe::decode` converts token strings back to text.
-//! - `Bpe::save` and `Bpe::load` persist the vocabulary as JSON.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -150,6 +148,13 @@ pub struct Bpe {
 
 impl Bpe {
     /// Train a byte level BPE tokenizer from a set of texts.
+    ///
+    /// Training a tokenizer is like learning the alphabet of a language, except
+    /// the alphabet is not fixed: it grows as frequent letter pairs become
+    /// subwords. The trainer counts how often each word appears, then
+    /// repeatedly fuses the most common adjacent pair into a new token. After
+    /// enough merges, the vocabulary contains useful pieces like `"ing"` and
+    /// `" the"` that make the model's job much easier.
     ///
     /// # Parameters
     ///

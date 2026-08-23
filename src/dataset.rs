@@ -1,18 +1,23 @@
 //! # Dataset
 //!
-//! Converts raw text files into fixed-length token sequences for language
-//! modeling.
+//! A language model is trained on one task: predict the next token. But raw
+//! text files are messy and variable-length, while a transformer expects fixed
+//! rectangular batches. The dataset module is the factory that turns a pile of
+//! `.txt` files into clean, fixed-length training examples.
 //!
-//! ## How language model data works
+//! The trick behind language modeling is that the data teaches the answer for
+//! free. Take a sequence of `block_size + 1` tokens. The first `block_size`
+//! tokens are the input, and the same sequence shifted one token to the right
+//! is the target. At every position the model must predict the token that
+//! actually came next, and the causal mask makes sure it cannot peek into the
+//! future while doing so.
 //!
-//! A decoder-only GPT is trained to predict the next token. For every sequence
-//! of `block_size + 1` tokens, the first `block_size` tokens are the input and
-//! the remaining tokens are the targets. The model sees only past tokens thanks
-//! to causal masking.
-//!
-//! Each document is prefixed with `<s>` and suffixed with `<eos>`, so the model
-//! learns where a song or chapter starts and where it ends. Short chunks are
-//! padded with `<eos>`.
+//! Documents are not just dumped into the model raw. Each one is wrapped with a
+//! beginning-of-sequence token `<s>` and an end-of-sequence token `<eos>`, so
+//! the model learns that songs and chapters have boundaries. When a document is
+//! shorter than the block size, the remaining slots are padded with `<eos>` so
+//! every batch stays rectangular without teaching the model that padding is a
+//! real word.
 //!
 //! ## References
 //!

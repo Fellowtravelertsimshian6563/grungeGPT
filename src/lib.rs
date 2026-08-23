@@ -1,17 +1,28 @@
 //! # grungeGPT
 //!
-//! A small, from-scratch decoder-only GPT trained on song lyrics and plain
-//! English text, written in idiomatic Rust with the Candle tensor library.
+//! Most people interact with large language models through an API and never
+//! see what is inside. This crate exists to open the box. It is a small,
+//! from-scratch decoder-only GPT written in idiomatic Rust with the Candle
+//! tensor library, trained on song lyrics and plain English text. Every stage
+//! of a modern language model is implemented here, in the open, so you can read
+//! it and change it.
 //!
-//! This crate is designed as a learning project. Every stage of a modern
-//! language model is implemented here in one place:
+//! The journey from raw text to generated lyrics passes through six stations:
 //!
-//! 1. **Tokenization** with a GPT-2 compatible byte level BPE tokenizer.
-//! 2. **Dataset construction** from plain text files.
-//! 3. **A decoder-only transformer** with causal self-attention.
-//! 4. **AdamW training** on CPU or CUDA.
-//! 5. **Sampling** with temperature and top-k.
-//! 6. **GGUF export** so the trained model can run in Ollama or llama.cpp.
+//! 1. **Tokenization**: a GPT-2 compatible byte level BPE tokenizer turns text
+//!    into integer ids.
+//! 2. **Dataset construction**: plain text files become fixed-length training
+//!    sequences with `<s>` and `<eos>` markers.
+//! 3. **The model**: a decoder-only transformer with causal self-attention
+//!    predicts the next token.
+//! 4. **Training**: AdamW minimizes cross-entropy on CPU or CUDA.
+//! 5. **Sampling**: temperature and top-k turn probabilities into text.
+//! 6. **GGUF export**: the trained weights are written into the format used by
+//!    llama.cpp and Ollama, so the model can run locally.
+//!
+//! Start with `cargo run -- go` to see the whole pipeline in action, then read
+//! the module docs in order. The references below are the best places to go
+//! deeper.
 //!
 //! # Educational references
 //!
@@ -22,7 +33,6 @@
 //! - Adam optimizer paper: <https://arxiv.org/abs/1412.6980>
 //! - AdamW paper: <https://arxiv.org/abs/1711.05101>
 //! - Layer Normalization paper: <https://arxiv.org/abs/1607.06450>
-//! - Attention Is All You Need explainer: <https://arxiv.org/abs/1706.03762>
 //! - Candle docs: <https://github.com/huggingface/candle>
 //! - llama.cpp GGUF docs: <https://github.com/ggerganov/llama.cpp>
 //! - Ollama docs: <https://docs.ollama.com>

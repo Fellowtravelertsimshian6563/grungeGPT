@@ -1,21 +1,32 @@
 //! # Model
 //!
-//! A decoder-only transformer in the style of GPT-2.
+//! A language model has to remember what it has read so far and use that memory
+//! to predict what comes next. The transformer does this with a stack of blocks
+//! that mix two ingredients: attention, which lets every token look at the
+//! tokens before it, and a feed-forward network, which thinks about what
+//! attention collected.
 //!
-//! ## Architecture
+//! The model here is a decoder-only transformer in the style of GPT-2. The
+//! pipeline is straightforward:
 //!
-//! 1. Token embeddings map token ids to vectors.
-//! 2. Position embeddings add the position of each token.
+//! 1. Token embeddings turn integer token ids into dense vectors.
+//! 2. Position embeddings add information about where each token sits in the
+//!    sequence, because attention by itself has no sense of order.
 //! 3. A stack of transformer blocks processes the sequence.
-//! 4. A final layer norm and linear head predict the next token.
+//! 4. A final layer norm and a linear projection produce logits for every token
+//!    in the vocabulary.
 //!
-//! Each transformer block contains:
+//! Inside each block, the most important piece is causal multi-head
+//! self-attention. The word "causal" means a token at position `i` can only
+//! attend to positions `0..=i`. Future tokens are hidden behind a mask of
+//! negative infinity, so the model cannot cheat by looking ahead. The attention
+//! scores are scaled by `1 / sqrt(head_dim)` before softmax, a detail from the
+//! original transformer paper that keeps the softmax from saturating as the
+//! sequence grows.
 //!
-//! - Causal multi-head self-attention, so a token can only attend to itself and
-//!   previous tokens.
-//! - A two-layer MLP with GELU activation.
-//! - Pre-norm LayerNorm and residual connections, which make deep networks
-//!   easier to optimize.
+//! Around the attention and the MLP, pre-norm LayerNorm and residual connections
+//! make the network much easier to optimize. Residuals give gradients a direct
+//! path through many layers, and LayerNorm keeps activations stable.
 //!
 //! ## References
 //!

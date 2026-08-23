@@ -1,20 +1,24 @@
 //! # GGUF export
 //!
-//! Writes the trained Candle model into the GGUF format used by llama.cpp and
-//! Ollama.
+//! Training produces weights, but weights alone are not a usable product.
+//! Ollama and llama.cpp do not understand Candle's in-memory layout or a
+//! standalone safetensors file. They expect a specific binary container called
+//! GGUF that describes both the numbers and how to interpret them. This module
+//! is the bridge between the training world and the local-inference world.
 //!
-//! ## What is GGUF?
+//! GGUF is a carefully structured binary format. It begins with a magic number
+//! and version, followed by metadata key-value pairs that tell the runtime
+//! things like "this is a gpt2 model", "the context length is 8192", and "here
+//! is the tokenizer vocabulary". After the metadata comes a table of tensor
+//! infos: names, shapes, types, and byte offsets. The actual weight bytes come
+//! last, aligned to 32-byte boundaries so the runtime can memory-map them
+//! efficiently.
 //!
-//! GGUF is a binary format for neural network weights and metadata. It stores:
-//!
-//! 1. A magic number and format version.
-//! 2. Metadata key-value pairs such as architecture, context length, and the
-//!    tokenizer.
-//! 3. Tensor names, shapes, types, and offsets.
-//! 4. Aligned tensor data.
-//!
-//! This exporter uses the `gpt2` architecture, so llama.cpp can load the model
-//! with its standard GPT-2 implementation.
+//! This exporter writes a `gpt2` architecture GGUF, which means llama.cpp can
+//! load the model with its battle-tested GPT-2 implementation. It also pads
+//! position embeddings when the advertised context is larger than the training
+//! block size, because llama.cpp expects a position embedding row for every
+//! context position.
 //!
 //! ## References
 //!

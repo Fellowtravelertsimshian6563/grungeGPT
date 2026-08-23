@@ -1,16 +1,20 @@
 //! # grungeGPT CLI
 //!
-//! Command line interface for downloading lyrics, training the model,
-//! generating text, and exporting GGUF files for Ollama.
+//! A library is a collection of parts, but a project only feels alive when the
+//! parts can be driven from a terminal. This binary is the control room for the
+//! whole pipeline: download lyrics, train a tokenizer, train the model,
+//! generate text, and export GGUF files for Ollama.
 //!
-//! ## Commands
+//! The commands are arranged in the order you would use them:
 //!
-//! - `go`: download lyrics if needed, train, and generate.
-//! - `fetch-lyrics`: download lyrics from lyrics.ovh.
-//! - `tokenizer`: train and save a tokenizer.
-//! - `train`: train the GPT model.
-//! - `generate` / `gen`: generate text from a checkpoint.
-//! - `export` / `export-gguf`: write a GGUF file for Ollama.
+//! - `go`: the one-shot journey. If lyrics are missing it downloads them, then
+//!   trains a model and prints a sample.
+//! - `fetch-lyrics`: fetch lyrics from lyrics.ovh for the configured artists.
+//! - `tokenizer`: train and save a BPE tokenizer from your text corpus.
+//! - `train`: train the GPT model, optionally continuing from a checkpoint with
+//!   `--resume`.
+//! - `generate` / `gen`: load a checkpoint and sample lyrics.
+//! - `export` / `export-gguf`: write a GGUF file that Ollama can serve.
 //!
 //! Run `grungegpt --help` for all options.
 
