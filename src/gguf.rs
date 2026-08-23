@@ -1,5 +1,5 @@
 use crate::model::{Gpt, GptConfig};
-use crate::tokenizer::{Bpe, WORD_END};
+use crate::tokenizer::Bpe;
 use anyhow::{Context, Result};
 use candle_core::{DType, Device};
 use candle_nn::{VarBuilder, VarMap};
@@ -140,16 +140,6 @@ fn map_tensor_name(
     }
 }
 
-fn gguf_token(token: &str) -> String {
-    if token == WORD_END {
-        return " ".to_string();
-    }
-    if let Some(stripped) = token.strip_suffix(WORD_END) {
-        return format!("{stripped} ");
-    }
-    token.to_string()
-}
-
 fn write_gguf<W: Write + Seek>(
     writer: &mut W,
     config: &GptConfig,
@@ -194,14 +184,13 @@ fn write_metadata<W: Write>(
     write_f32_value(writer, "gpt2.attention.layer_norm_epsilon", 1e-5)?;
     write_bool_value(writer, "gpt2.attention.causal", true)?;
     write_string_value(writer, "tokenizer.ggml.model", "gpt2")?;
-    write_string_value(writer, "tokenizer.ggml.pre", "whitespace")?;
-    let tokens: Vec<String> = tokenizer.tokens().iter().map(|t| gguf_token(t)).collect();
-    write_string_array(writer, "tokenizer.ggml.tokens", &tokens)?;
+    write_string_value(writer, "tokenizer.ggml.pre", "gpt-2")?;
+    write_string_array(writer, "tokenizer.ggml.tokens", tokenizer.tokens())?;
 
     let merges: Vec<String> = tokenizer
         .merges()
         .iter()
-        .map(|rule| format!("{} {}", gguf_token(&rule.left), gguf_token(&rule.right)))
+        .map(|rule| format!("{} {}", rule.left, rule.right))
         .collect();
     write_string_array(writer, "tokenizer.ggml.merges", &merges)?;
 

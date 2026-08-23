@@ -2,11 +2,10 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::LazyLock;
 
 pub const BOS_TOKEN: &str = "<s>";
 pub const UNK_TOKEN: &str = "<unk>";
-pub const WORD_END: &str = "</w>";
-pub const NEWLINE_TOKEN: &str = "\n";
 
 /// A single BPE merge rule: `(left, right)` becomes `merged`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,11 +15,56 @@ pub struct BpeTrio {
     pub merged: String,
 }
 
-/// A byte pair encoding tokenizer with word end markers.
+/// GPT-2 byte-to-unicode encoder.
 ///
-/// The merge machinery follows the reference implementation from
-/// `coding_standards.md`: pair counts are collected inside each word,
-/// the best pair is merged, and encoding replays every learned rule.
+/// Printable ASCII and Latin-1 bytes map to themselves. Every other byte maps to
+/// a private use codepoint, which lets BPE operate on bytes without ambiguity.
+static BYTE_ENCODER: LazyLock<Vec<char>> = LazyLock::new(|| {
+    let mut bytes = Vec::new();
+    let mut chars = Vec::new();
+
+    for byte in b'!'..=b'~' {
+        bytes.push(byte);
+        chars.push(byte as char);
+    }
+    for byte in 0xA1..=0xAC {
+        bytes.push(byte);
+        chars.push(byte as char);
+    }
+    for byte in 0xAE..=0xFF {
+        bytes.push(byte);
+        chars.push(byte as char);
+    }
+
+    let mut extra = 0u32;
+    for byte in 0..=255u8 {
+        if !bytes.contains(&byte) {
+            bytes.push(byte);
+            chars.push(char::from_u32(0x0100 + extra).expect("valid private use codepoint"));
+            extra += 1;
+        }
+    }
+
+    let mut table = vec!['\0'; 256];
+    for (byte, ch) in bytes.iter().zip(chars.iter()) {
+        table[*byte as usize] = *ch;
+    }
+    table
+});
+
+static BYTE_DECODER: LazyLock<HashMap<char, u8>> = LazyLock::new(|| {
+    BYTE_ENCODER
+        .iter()
+        .enumerate()
+        .map(|(byte, ch)| (*ch, byte as u8))
+        .collect()
+});
+
+/// A byte pair encoding tokenizer compatible with llama.cpp GPT-2 tokenizers.
+///
+/// Text is byte-encoded first, split into words with GPT-2 style leading spaces,
+/// and then merged with learned BPE rules. There are no word end markers, so the
+/// same vocab and merges can be written into a GGUF file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Bpe {
     merges: Vec<BpeTrio>,
@@ -30,7 +74,7 @@ pub struct Bpe {
 }
 
 impl Bpe {
-    /// Train a BPE tokenizer from a set of texts.
+    /// Train a byte level BPE tokenizer from a set of texts.
     pub fn train(texts: &[String], num_merges: usize) -> Self {
         let words: Vec<String> = texts
             .iter()
@@ -80,7 +124,7 @@ impl Bpe {
         tokenizer
     }
 
-    /// Encode text into token strings.
+    /// Encode text into byte level token strings.
     pub fn encode(&self, text: &str) -> Vec<String> {
         let mut tokens = Vec::new();
         for word in Self::pretokenize(text) {
@@ -108,30 +152,10 @@ impl Bpe {
             .collect()
     }
 
-    /// Decode token strings back into text.
+    /// Decode byte level token strings back into text.
     pub fn decode(&self, tokens: &[String]) -> String {
-        let mut out = String::new();
-        for token in tokens {
-            match token.strip_suffix(WORD_END) {
-                Some(stripped) if stripped == NEWLINE_TOKEN => {
-                    trim_trailing_spaces(&mut out);
-                    out.push('\n');
-                }
-                Some(stripped) => {
-                    out.push_str(stripped);
-                    if !out.ends_with('\n') {
-                        out.push(' ');
-                    }
-                }
-                None if token == NEWLINE_TOKEN => {
-                    trim_trailing_spaces(&mut out);
-                    out.push('\n');
-                }
-                None => out.push_str(token),
-            }
-        }
-        trim_trailing_spaces(&mut out);
-        out
+        let encoded: String = tokens.concat();
+        byte_decode(&encoded)
     }
 
     /// Decode token ids back into text.
@@ -209,39 +233,50 @@ impl Bpe {
         self.vocab.get(id as usize).map(String::as_str)
     }
 
-    /// Split text into words while keeping newlines as standalone words.
+    /// Split text into byte encoded words.
+    ///
+    /// A single space is kept as the prefix of every word that follows whitespace,
+    /// matching the GPT-2 pre-tokenizer. Newlines become standalone words.
     fn pretokenize(text: &str) -> Vec<String> {
         let mut words = Vec::new();
         let mut current = String::new();
+        let mut needs_space = false;
 
         for ch in text.chars() {
             match ch {
                 '\n' => {
                     if !current.is_empty() {
-                        words.push(std::mem::take(&mut current));
+                        words.push(byte_encode(&current));
+                        current.clear();
                     }
-                    words.push(NEWLINE_TOKEN.to_string());
+                    words.push(byte_encode("\n"));
+                    needs_space = false;
                 }
                 c if c.is_whitespace() => {
                     if !current.is_empty() {
-                        words.push(std::mem::take(&mut current));
+                        words.push(byte_encode(&current));
+                        current.clear();
                     }
+                    needs_space = true;
                 }
-                c => current.push(c),
+                c => {
+                    if current.is_empty() && needs_space {
+                        current.push(' ');
+                        needs_space = false;
+                    }
+                    current.push(c);
+                }
             }
         }
 
         if !current.is_empty() {
-            words.push(current);
+            words.push(byte_encode(&current));
         }
         words
     }
 
     fn tokenize(word: &str) -> Vec<String> {
-        word.chars()
-            .map(|c| c.to_string())
-            .chain(std::iter::once(WORD_END.to_string()))
-            .collect()
+        word.chars().map(|c| c.to_string()).collect()
     }
 
     fn pair_counts(words: &[Vec<String>]) -> HashMap<(String, String), usize> {
@@ -294,11 +329,19 @@ impl Bpe {
     }
 }
 
-/// Remove trailing spaces from a string being assembled during decoding.
-fn trim_trailing_spaces(out: &mut String) {
-    while out.ends_with(' ') {
-        out.pop();
-    }
+fn byte_encode(text: &str) -> String {
+    text.as_bytes()
+        .iter()
+        .map(|byte| BYTE_ENCODER[*byte as usize])
+        .collect()
+}
+
+fn byte_decode(encoded: &str) -> String {
+    let bytes: Vec<u8> = encoded
+        .chars()
+        .filter_map(|ch| BYTE_DECODER.get(&ch).copied())
+        .collect();
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 #[cfg(test)]
@@ -324,7 +367,7 @@ mod tests {
     fn learns_merges() {
         let tokenizer = Bpe::train(&sample_texts(), 20);
         assert!(!tokenizer.merges.is_empty());
-        assert!(tokenizer.vocab_size() >= tokenizer.merges.len() + 4);
+        assert!(tokenizer.vocab_size() >= tokenizer.merges.len() + 2);
     }
 
     #[test]
@@ -332,5 +375,12 @@ mod tests {
         let tokenizer = Bpe::train(&sample_texts(), 20);
         let ids = tokenizer.encode_ids("low");
         assert!(ids.iter().all(|id| *id < tokenizer.vocab_size() as u32));
+    }
+
+    #[test]
+    fn byte_round_trip() {
+        let text = "hello world\nfoo bar";
+        let encoded = byte_encode(text);
+        assert_eq!(byte_decode(&encoded), text);
     }
 }
