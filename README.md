@@ -133,18 +133,23 @@ The saved JSON can be reused across training runs.
 
 ## Train the model
 
+From scratch means a new tokenizer is learned from all `.txt` files under
+`--data`, and the model weights start from zero:
+
 ```bash
-cargo run --release -- train \
+cargo run --release --features cuda -- train \
   --data data \
   --out-dir checkpoints/grungegpt \
-  --steps 5000 \
+  --merges 1024 \
+  --steps 20000 \
   --batch-size 8 \
   --block-size 128 \
-  --n-layer 4 \
-  --n-embd 192 \
+  --n-layer 6 \
+  --n-embd 320 \
   --n-head 8 \
-  --learning-rate 0.001 \
-  --eval-every 500
+  --learning-rate 0.0005 \
+  --eval-every 500 \
+  --device cuda
 ```
 
 Output files:
@@ -153,7 +158,8 @@ Output files:
 - `config.json` model hyperparameters
 - `tokenizer.json` tokenizer vocabulary and merges
 
-Use `--device cuda` when built with the `cuda` feature.
+Use `--device cuda` when built with the `cuda` feature. Omit `--features cuda`
+and `--device cuda` for CPU-only training.
 
 ## Continue training from a checkpoint
 
@@ -161,24 +167,43 @@ To continue from an existing checkpoint, pass the old tokenizer and the old
 weights. The model loads the saved weights and keeps training:
 
 ```bash
-cargo run --release -- train \
+cargo run --release --features cuda -- train \
   --data data \
   --tokenizer checkpoints/grungegpt/tokenizer.json \
   --resume checkpoints/grungegpt/model.safetensors \
   --out-dir checkpoints/grungegpt-v2 \
-  --steps 5000 \
+  --steps 10000 \
   --batch-size 8 \
   --block-size 128 \
   --n-layer 4 \
   --n-embd 192 \
   --n-head 8 \
-  --learning-rate 0.0005
+  --learning-rate 0.0003 \
+  --device cuda
 ```
 
 This is how you can append new songs or books to `data/lyrics` or `data/text`
 and continue improving an existing model instead of starting from zero.
 
-The optimizer state starts fresh, but the model weights are preserved.
+Important rules for resume:
+
+- The architecture must match the checkpoint. Check `config.json` first:
+
+  ```bash
+  cat checkpoints/grungegpt/config.json
+  ```
+
+  Then use the same `--block-size`, `--n-layer`, `--n-embd`, and `--n-head`
+  values.
+
+- Always reuse the checkpoint's `tokenizer.json`. If you train a new tokenizer,
+  the vocabulary size changes and the old weights cannot be loaded.
+
+- The optimizer state starts fresh, so a lower learning rate like `0.0003` is a
+  good idea.
+
+- Add new data anywhere under `data`, for example `data/new_songs/` or
+  `data/new_books/`, and the loader picks it up recursively.
 
 ## Generate lyrics
 
