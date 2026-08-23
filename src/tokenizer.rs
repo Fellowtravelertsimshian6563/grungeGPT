@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 pub const BOS_TOKEN: &str = "<s>";
+pub const EOS_TOKEN: &str = "<eos>";
 pub const UNK_TOKEN: &str = "<unk>";
 
 /// A single BPE merge rule: `(left, right)` becomes `merged`.
@@ -81,7 +82,11 @@ impl Bpe {
             .flat_map(|text| Self::pretokenize(text))
             .collect();
 
-        let mut vocab: Vec<String> = vec![BOS_TOKEN.to_string(), UNK_TOKEN.to_string()];
+        let mut vocab: Vec<String> = vec![
+            BOS_TOKEN.to_string(),
+            EOS_TOKEN.to_string(),
+            UNK_TOKEN.to_string(),
+        ];
         let mut seen = vocab
             .iter()
             .cloned()
@@ -185,6 +190,11 @@ impl Bpe {
     /// Id of the beginning of sequence token.
     pub fn bos_id(&self) -> u32 {
         self.id(BOS_TOKEN).expect("BOS token must be in vocab")
+    }
+
+    /// Id of the end of sequence token.
+    pub fn eos_id(&self) -> u32 {
+        self.id(EOS_TOKEN).expect("EOS token must be in vocab")
     }
 
     /// Id of the unknown token.
@@ -367,7 +377,7 @@ mod tests {
     fn learns_merges() {
         let tokenizer = Bpe::train(&sample_texts(), 20);
         assert!(!tokenizer.merges.is_empty());
-        assert!(tokenizer.vocab_size() >= tokenizer.merges.len() + 2);
+        assert!(tokenizer.vocab_size() >= tokenizer.merges.len() + 3);
     }
 
     #[test]

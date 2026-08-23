@@ -14,19 +14,21 @@ pub struct Dataset {
 }
 
 impl Dataset {
-    /// Build fixed-length sequences from texts, prefixing each with the BOS token.
+    /// Build fixed-length sequences from texts, prefixing each with the BOS token and appending EOS.
     pub fn from_texts(texts: &[String], tokenizer: &Bpe, block_size: usize) -> Result<Self> {
         let seq_len = block_size + 1;
         let bos = tokenizer.bos_id();
+        let eos = tokenizer.eos_id();
         let mut sequences = Vec::new();
 
         for text in texts {
-            let ids = tokenizer.encode_ids(text);
+            let mut ids = tokenizer.encode_ids(text);
+            ids.push(eos);
             for chunk in ids.chunks(block_size) {
                 let mut sequence = Vec::with_capacity(seq_len);
                 sequence.push(bos);
                 sequence.extend_from_slice(chunk);
-                sequence.resize(seq_len, bos);
+                sequence.resize(seq_len, eos);
                 sequences.push(sequence);
             }
         }

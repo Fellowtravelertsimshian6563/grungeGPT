@@ -25,6 +25,7 @@ pub fn generate(
     let mut rng = StdRng::seed_from_u64(config.seed);
     let block_size = model.block_size();
     let bos = tokenizer.bos_id();
+    let eos = tokenizer.eos_id();
 
     let mut context = tokenizer.encode_ids(prompt);
     if context.is_empty() {
@@ -48,6 +49,9 @@ pub fn generate(
 
         context.push(next);
         output.push(next);
+        if next == eos {
+            break;
+        }
     }
 
     Ok(tokenizer.decode_ids(&output))

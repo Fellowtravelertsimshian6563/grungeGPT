@@ -195,8 +195,9 @@ fn write_metadata<W: Write>(
     write_string_array(writer, "tokenizer.ggml.merges", &merges)?;
 
     let bos = tokenizer.bos_id();
+    let eos = tokenizer.eos_id();
     write_u32_value(writer, "tokenizer.ggml.bos_token_id", bos)?;
-    write_u32_value(writer, "tokenizer.ggml.eos_token_id", bos)?;
+    write_u32_value(writer, "tokenizer.ggml.eos_token_id", eos)?;
     write_bool_value(writer, "tokenizer.ggml.add_bos_token", false)?;
     write_bool_value(writer, "tokenizer.ggml.add_eos_token", false)?;
     Ok(())
