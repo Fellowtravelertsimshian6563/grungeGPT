@@ -17,9 +17,6 @@ pub struct BpeTrio {
 }
 
 /// GPT-2 byte-to-unicode encoder.
-///
-/// Printable ASCII and Latin-1 bytes map to themselves. Every other byte maps to
-/// a private use codepoint, which lets BPE operate on bytes without ambiguity.
 static BYTE_ENCODER: LazyLock<Vec<char>> = LazyLock::new(|| {
     let mut bytes = Vec::new();
     let mut chars = Vec::new();
@@ -61,25 +58,38 @@ static BYTE_DECODER: LazyLock<HashMap<char, u8>> = LazyLock::new(|| {
         .collect()
 });
 
+struct SymbolWord {
+    symbols: Vec<String>,
+    freq: usize,
+}
+
 /// A byte pair encoding tokenizer compatible with llama.cpp GPT-2 tokenizers.
-///
-/// Text is byte-encoded first, split into words with GPT-2 style leading spaces,
-/// and then merged with learned BPE rules. There are no word end markers, so the
-/// same vocab and merges can be written into a GGUF file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Bpe {
     merges: Vec<BpeTrio>,
     vocab: Vec<String>,
     #[serde(skip)]
     ids: HashMap<String, u32>,
+    #[serde(skip)]
+    bpe_ranks: HashMap<(String, String), usize>,
 }
 
 impl Bpe {
     /// Train a byte level BPE tokenizer from a set of texts.
     pub fn train(texts: &[String], num_merges: usize) -> Self {
-        let words: Vec<String> = texts
-            .iter()
-            .flat_map(|text| Self::pretokenize(text))
+        let mut word_freq: HashMap<String, usize> = HashMap::new();
+        for text in texts {
+            for word in Self::pretokenize(text) {
+                *word_freq.entry(word).or_insert(0) += 1;
+            }
+        }
+
+        let mut words: Vec<SymbolWord> = word_freq
+            .into_iter()
+            .map(|(word, freq)| SymbolWord {
+                symbols: Self::tokenize(&word),
+                freq,
+            })
             .collect();
 
         let mut vocab: Vec<String> = vec![
@@ -91,23 +101,38 @@ impl Bpe {
             .iter()
             .cloned()
             .collect::<std::collections::HashSet<_>>();
-        let mut word_tokens: Vec<Vec<String>> = Vec::with_capacity(words.len());
 
         for word in &words {
-            let tokens = Self::tokenize(word);
-            for token in &tokens {
-                if seen.insert(token.clone()) {
-                    vocab.push(token.clone());
+            for symbol in &word.symbols {
+                if seen.insert(symbol.clone()) {
+                    vocab.push(symbol.clone());
                 }
             }
-            word_tokens.push(tokens);
+        }
+
+        let mut pair_counts: HashMap<(String, String), usize> = HashMap::new();
+        let mut pair_to_words: HashMap<(String, String), Vec<usize>> = HashMap::new();
+        for (index, word) in words.iter().enumerate() {
+            for pair in word.symbols.windows(2) {
+                let key = (pair[0].clone(), pair[1].clone());
+                *pair_counts.entry(key.clone()).or_insert(0) += word.freq;
+                pair_to_words.entry(key).or_default().push(index);
+            }
         }
 
         let mut merges = Vec::with_capacity(num_merges);
+        let mut processed = vec![false; words.len()];
+
         for _ in 0..num_merges {
-            let Some((left, right)) = Self::find_best_pair(&word_tokens) else {
+            processed.fill(false);
+            let Some((left, right)) = pair_counts
+                .iter()
+                .max_by_key(|(_, count)| **count)
+                .map(|((left, right), _)| (left.clone(), right.clone()))
+            else {
                 break;
             };
+
             let merged = format!("{left}{right}");
             if seen.insert(merged.clone()) {
                 vocab.push(merged.clone());
@@ -117,13 +142,64 @@ impl Bpe {
                 right: right.clone(),
                 merged: merged.clone(),
             });
-            word_tokens = Self::merge_corpus(&word_tokens, &left, &right, &merged);
+
+            let Some(indices) = pair_to_words.get(&(left.clone(), right.clone())).cloned() else {
+                break;
+            };
+
+            for index in indices {
+                if processed[index] {
+                    continue;
+                }
+                processed[index] = true;
+
+                let word = &mut words[index];
+                if !word
+                    .symbols
+                    .windows(2)
+                    .any(|pair| pair[0] == left && pair[1] == right)
+                {
+                    continue;
+                }
+
+                for pair in word.symbols.windows(2) {
+                    let key = (pair[0].clone(), pair[1].clone());
+                    let count = pair_counts.entry(key.clone()).or_insert(0);
+                    *count = count.saturating_sub(word.freq);
+                    if *count == 0 {
+                        pair_counts.remove(&key);
+                    }
+                }
+
+                let mut new_symbols = Vec::with_capacity(word.symbols.len());
+                let mut index_in_word = 0;
+                while index_in_word < word.symbols.len() {
+                    if index_in_word + 1 < word.symbols.len()
+                        && word.symbols[index_in_word] == left
+                        && word.symbols[index_in_word + 1] == right
+                    {
+                        new_symbols.push(merged.clone());
+                        index_in_word += 2;
+                    } else {
+                        new_symbols.push(word.symbols[index_in_word].clone());
+                        index_in_word += 1;
+                    }
+                }
+
+                for pair in new_symbols.windows(2) {
+                    let key = (pair[0].clone(), pair[1].clone());
+                    *pair_counts.entry(key.clone()).or_insert(0) += word.freq;
+                    pair_to_words.entry(key).or_default().push(index);
+                }
+                word.symbols = new_symbols;
+            }
         }
 
         let mut tokenizer = Self {
             merges,
             vocab,
             ids: HashMap::new(),
+            bpe_ranks: HashMap::new(),
         };
         tokenizer.rebuild_index();
         tokenizer
@@ -133,17 +209,25 @@ impl Bpe {
     pub fn encode(&self, text: &str) -> Vec<String> {
         let mut tokens = Vec::new();
         for word in Self::pretokenize(text) {
-            let mut word_tokens = Self::tokenize(&word);
-            // Destructuring the struct directly in the loop pattern.
-            for BpeTrio {
-                left,
-                right,
-                merged,
-            } in &self.merges
-            {
-                word_tokens = Self::merge_tokens(&word_tokens, left, right, merged);
+            let mut symbols = Self::tokenize(&word);
+            while symbols.len() > 1 {
+                let mut best: Option<(usize, usize)> = None;
+                for index in 0..symbols.len() - 1 {
+                    let key = (symbols[index].clone(), symbols[index + 1].clone());
+                    if let Some(rank) = self.bpe_ranks.get(&key) {
+                        if best.is_none_or(|(_, best_rank)| *rank < best_rank) {
+                            best = Some((index, *rank));
+                        }
+                    }
+                }
+                let Some((index, _)) = best else {
+                    break;
+                };
+                let merged = format!("{}{}", symbols[index], symbols[index + 1]);
+                symbols[index] = merged;
+                symbols.remove(index + 1);
             }
-            tokens.extend(word_tokens);
+            tokens.extend(symbols);
         }
         tokens
     }
@@ -233,6 +317,12 @@ impl Bpe {
             .enumerate()
             .map(|(id, token)| (token.clone(), id as u32))
             .collect();
+        self.bpe_ranks = self
+            .merges
+            .iter()
+            .enumerate()
+            .map(|(rank, rule)| ((rule.left.clone(), rule.right.clone()), rank))
+            .collect();
     }
 
     fn id(&self, token: &str) -> Option<u32> {
@@ -287,55 +377,6 @@ impl Bpe {
 
     fn tokenize(word: &str) -> Vec<String> {
         word.chars().map(|c| c.to_string()).collect()
-    }
-
-    fn pair_counts(words: &[Vec<String>]) -> HashMap<(String, String), usize> {
-        words
-            .iter()
-            .flat_map(|word| word.windows(2))
-            .fold(HashMap::new(), |mut acc, pair| {
-                let key = (pair[0].clone(), pair[1].clone());
-                *acc.entry(key).or_insert(0) += 1;
-                acc
-            })
-    }
-
-    fn find_best_pair(words: &[Vec<String>]) -> Option<(String, String)> {
-        Self::pair_counts(words)
-            .into_iter()
-            .max_by_key(|(_, count)| *count)
-            .map(|((left, right), _)| (left, right))
-    }
-
-    fn merge_corpus(
-        words: &[Vec<String>],
-        left: &str,
-        right: &str,
-        merged: &str,
-    ) -> Vec<Vec<String>> {
-        words
-            .iter()
-            .map(|word| Self::merge_tokens(word, left, right, merged))
-            .collect()
-    }
-
-    /// Recursive slice pattern matching with zero `if`/`else` branches.
-    fn merge_tokens(tokens: &[String], left: &str, right: &str, merged: &str) -> Vec<String> {
-        match tokens {
-            [head, second, tail @ ..] if head == left && second == right => {
-                let mut result = vec![merged.to_string()];
-                result.extend(Self::merge_tokens(tail, left, right, merged));
-                result
-            }
-
-            [head, tail @ ..] => {
-                let mut result = vec![head.clone()];
-                result.extend(Self::merge_tokens(tail, left, right, merged));
-                result
-            }
-
-            [] => vec![],
-        }
     }
 }
 

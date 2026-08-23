@@ -5,3 +5,4 @@
 /data/lyrics/*.txt
 /data/lyrics/**/*.txt
 !/data/lyrics/sample_lyrics.txt
+/data/text/*.txt
