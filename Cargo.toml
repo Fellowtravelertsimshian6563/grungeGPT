@@ -1,0 +1,29 @@
+[package]
+name = "grungegpt"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A small GPT trained on song lyrics with a pure Rust BPE tokenizer and Candle."
+license = "Apache-2.0"
+repository = "https://github.com/arpanpathak/grungeGPT"
+readme = "README.md"
+keywords = ["gpt", "tokenizer", "bpe", "lyrics", "machine-learning"]
+categories = ["machine-learning", "text-processing"]
+
+[features]
+default = []
+cuda = ["candle-core/cuda", "candle-nn/cuda"]
+
+[dependencies]
+anyhow = "1"
+candle-core = "0.10"
+candle-nn = "0.10"
+clap = { version = "4", features = ["derive"] }
+rand = "0.8"
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

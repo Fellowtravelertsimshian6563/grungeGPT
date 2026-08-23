@@ -1,0 +1,5 @@
+/target
+/checkpoints
+/tokenizer.json
+/data/lyrics/*.txt
+!/data/lyrics/sample_lyrics.txt
