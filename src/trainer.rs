@@ -7,6 +7,7 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 use std::time::Instant;
 
+/// Training loop configuration.
 #[derive(Debug, Clone)]
 pub struct TrainConfig {
     pub batch_size: usize,
@@ -16,6 +17,7 @@ pub struct TrainConfig {
     pub seed: u64,
 }
 
+/// Train a GPT model on a dataset and return the weights and model.
 pub fn train_model(
     dataset: &Dataset,
     config: &GptConfig,

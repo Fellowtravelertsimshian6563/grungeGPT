@@ -1,5 +1,7 @@
 /target
 /checkpoints
 /tokenizer.json
+/*.gguf
 /data/lyrics/*.txt
+/data/lyrics/**/*.txt
 !/data/lyrics/sample_lyrics.txt

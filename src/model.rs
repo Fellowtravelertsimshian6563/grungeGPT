@@ -4,6 +4,7 @@ use candle_nn::{Embedding, LayerNorm, Linear, Module, VarBuilder, VarMap};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+/// Hyperparameters for the decoder-only transformer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GptConfig {
     pub vocab_size: usize,
@@ -254,6 +255,8 @@ pub fn load_checkpoint(config_path: &Path, model_path: &Path, device: &Device) -
         .with_context(|| format!("failed to read {}", config_path.display()))?;
 
     let mut varmap = VarMap::new();
+    let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
+    let _model = Gpt::new(vb, &config)?;
     varmap
         .load(model_path)
         .with_context(|| format!("failed to load {}", model_path.display()))?;

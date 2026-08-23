@@ -14,6 +14,7 @@ pub struct Dataset {
 }
 
 impl Dataset {
+    /// Build fixed-length sequences from texts, prefixing each with the BOS token.
     pub fn from_texts(texts: &[String], tokenizer: &Bpe, block_size: usize) -> Result<Self> {
         let seq_len = block_size + 1;
         let bos = tokenizer.bos_id();
@@ -40,14 +41,17 @@ impl Dataset {
         })
     }
 
+    /// Number of tokens in each training sequence.
     pub fn block_size(&self) -> usize {
         self.block_size
     }
 
+    /// Number of fixed-length sequences in the dataset.
     pub fn sequence_count(&self) -> usize {
         self.sequences.len()
     }
 
+    /// Sample a random batch of input and target tensors on the given device.
     pub fn sample_batch(
         &self,
         rng: &mut StdRng,
@@ -94,6 +98,13 @@ pub fn load_lyrics_dir(path: &Path) -> Result<Vec<String>> {
     Ok(texts)
 }
 
+/// Count `.txt` files under a directory, recursively.
+pub fn lyrics_file_count(path: &Path) -> Result<usize> {
+    let mut files = Vec::new();
+    collect_txt_files(path, &mut files)?;
+    Ok(files.len())
+}
+
 fn collect_txt_files(path: &Path, files: &mut Vec<std::path::PathBuf>) -> Result<()> {
     let entries = std::fs::read_dir(path)
         .with_context(|| format!("failed to read directory {}", path.display()))?;
@@ -102,14 +113,16 @@ fn collect_txt_files(path: &Path, files: &mut Vec<std::path::PathBuf>) -> Result
         let entry = entry?;
         let file_type = entry.file_type()?;
         let path = entry.path();
-        if file_type.is_dir() {
-            collect_txt_files(&path, files)?;
-        } else if file_type.is_file()
-            && path
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("txt"))
-        {
-            files.push(path);
+        match (file_type.is_dir(), file_type.is_file()) {
+            (true, _) => collect_txt_files(&path, files)?,
+            (false, true)
+                if path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("txt")) =>
+            {
+                files.push(path);
+            }
+            _ => {}
         }
     }
     Ok(())

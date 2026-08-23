@@ -30,6 +30,7 @@ pub struct Bpe {
 }
 
 impl Bpe {
+    /// Train a BPE tokenizer from a set of texts.
     pub fn train(texts: &[String], num_merges: usize) -> Self {
         let words: Vec<String> = texts
             .iter()
@@ -79,25 +80,26 @@ impl Bpe {
         tokenizer
     }
 
+    /// Encode text into token strings.
     pub fn encode(&self, text: &str) -> Vec<String> {
         let mut tokens = Vec::new();
         for word in Self::pretokenize(text) {
-            tokens.extend(Self::tokenize(&word));
+            let mut word_tokens = Self::tokenize(&word);
+            // Destructuring the struct directly in the loop pattern.
+            for BpeTrio {
+                left,
+                right,
+                merged,
+            } in &self.merges
+            {
+                word_tokens = Self::merge_tokens(&word_tokens, left, right, merged);
+            }
+            tokens.extend(word_tokens);
         }
-
-        // Destructuring the struct directly in the loop pattern.
-        for BpeTrio {
-            left,
-            right,
-            merged,
-        } in &self.merges
-        {
-            tokens = Self::merge_tokens(&tokens, left, right, merged);
-        }
-
         tokens
     }
 
+    /// Encode text into token ids.
     pub fn encode_ids(&self, text: &str) -> Vec<u32> {
         let unk = self.id(UNK_TOKEN).unwrap_or(0);
         self.encode(text)
@@ -106,42 +108,33 @@ impl Bpe {
             .collect()
     }
 
+    /// Decode token strings back into text.
     pub fn decode(&self, tokens: &[String]) -> String {
         let mut out = String::new();
         for token in tokens {
             match token.strip_suffix(WORD_END) {
+                Some(stripped) if stripped == NEWLINE_TOKEN => {
+                    trim_trailing_spaces(&mut out);
+                    out.push('\n');
+                }
                 Some(stripped) => {
-                    if stripped == NEWLINE_TOKEN {
-                        while out.ends_with(' ') {
-                            out.pop();
-                        }
-                        out.push('\n');
-                    } else {
-                        if !stripped.is_empty() {
-                            out.push_str(stripped);
-                        }
-                        if !out.ends_with('\n') {
-                            out.push(' ');
-                        }
+                    out.push_str(stripped);
+                    if !out.ends_with('\n') {
+                        out.push(' ');
                     }
                 }
-                None => match token.as_str() {
-                    NEWLINE_TOKEN => {
-                        while out.ends_with(' ') {
-                            out.pop();
-                        }
-                        out.push('\n');
-                    }
-                    _ => out.push_str(token),
-                },
+                None if token == NEWLINE_TOKEN => {
+                    trim_trailing_spaces(&mut out);
+                    out.push('\n');
+                }
+                None => out.push_str(token),
             }
         }
-        while out.ends_with(' ') {
-            out.pop();
-        }
+        trim_trailing_spaces(&mut out);
         out
     }
 
+    /// Decode token ids back into text.
     pub fn decode_ids(&self, ids: &[u32]) -> String {
         let tokens: Vec<String> = ids
             .iter()
@@ -150,22 +143,37 @@ impl Bpe {
         self.decode(&tokens)
     }
 
+    /// Number of tokens in the vocabulary.
     pub fn vocab_size(&self) -> usize {
         self.vocab.len()
     }
 
+    /// All vocabulary tokens in id order.
+    pub fn tokens(&self) -> &[String] {
+        &self.vocab
+    }
+
+    /// Learned BPE merge rules.
+    pub fn merges(&self) -> &[BpeTrio] {
+        &self.merges
+    }
+
+    /// Id of the beginning of sequence token.
     pub fn bos_id(&self) -> u32 {
         self.id(BOS_TOKEN).expect("BOS token must be in vocab")
     }
 
+    /// Id of the unknown token.
     pub fn unk_id(&self) -> u32 {
         self.id(UNK_TOKEN).expect("UNK token must be in vocab")
     }
 
+    /// Look up the token string for an id.
     pub fn id_to_token(&self, id: u32) -> Option<&str> {
         self.token(id)
     }
 
+    /// Save the tokenizer as JSON.
     pub fn save(&self, path: &Path) -> Result<()> {
         let file = std::fs::File::create(path)
             .with_context(|| format!("failed to create tokenizer file {}", path.display()))?;
@@ -174,6 +182,7 @@ impl Bpe {
         Ok(())
     }
 
+    /// Load a tokenizer from JSON.
     pub fn load(path: &Path) -> Result<Self> {
         let file = std::fs::File::open(path)
             .with_context(|| format!("failed to open tokenizer file {}", path.display()))?;
@@ -282,6 +291,13 @@ impl Bpe {
 
             [] => vec![],
         }
+    }
+}
+
+/// Remove trailing spaces from a string being assembled during decoding.
+fn trim_trailing_spaces(out: &mut String) {
+    while out.ends_with(' ') {
+        out.pop();
     }
 }
 

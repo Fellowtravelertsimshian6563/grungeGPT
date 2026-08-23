@@ -5,6 +5,7 @@ use candle_core::{Device, Tensor};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
+/// Sampling options for lyric generation.
 #[derive(Debug, Clone)]
 pub struct GenerateConfig {
     pub max_tokens: usize,
@@ -13,6 +14,7 @@ pub struct GenerateConfig {
     pub seed: u64,
 }
 
+/// Generate text from a trained model using the configured sampler.
 pub fn generate(
     model: &Gpt,
     tokenizer: &Bpe,
@@ -67,17 +69,15 @@ fn sample_token(
         .map(|logit| logit / temperature as f32)
         .collect();
 
-    if let Some(k) = top_k {
-        if k > 0 && k < scores.len() {
-            let mut sorted = scores.clone();
-            sorted.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
-            let cutoff = sorted[k - 1];
-            for score in &mut scores {
-                if *score < cutoff {
-                    *score = f32::NEG_INFINITY;
-                }
+    if let Some(k) = top_k.filter(|k| *k > 0 && *k < scores.len()) {
+        let mut sorted = scores.clone();
+        sorted.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        let cutoff = sorted[k - 1];
+        scores.iter_mut().for_each(|score| {
+            if *score < cutoff {
+                *score = f32::NEG_INFINITY;
             }
-        }
+        });
     }
 
     let max = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);

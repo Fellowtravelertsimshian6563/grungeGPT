@@ -1,12 +1,33 @@
 use anyhow::Result;
 use candle_core::Device;
 use clap::{Args, Parser, Subcommand};
-use grungegpt::dataset::{Dataset, load_lyrics_dir};
+use grungegpt::dataset::{Dataset, load_lyrics_dir, lyrics_file_count};
+use grungegpt::fetcher::fetch_lyrics;
+use grungegpt::gguf::export_gguf;
 use grungegpt::model::{GptConfig, load_checkpoint, save_checkpoint};
 use grungegpt::sampler::{GenerateConfig, generate};
 use grungegpt::tokenizer::Bpe;
 use grungegpt::trainer::{TrainConfig, train_model};
 use std::path::PathBuf;
+
+/// Device selection for training and generation.
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+enum DeviceChoice {
+    Cpu,
+    Cuda,
+    #[default]
+    Auto,
+}
+
+impl DeviceChoice {
+    fn resolve(self) -> Result<Device> {
+        match self {
+            Self::Cpu => Ok(Device::Cpu),
+            Self::Cuda => Ok(Device::new_cuda(0)?),
+            Self::Auto => Ok(Device::cuda_if_available(0)?),
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -21,12 +42,21 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Run the full pipeline: fetch lyrics, train, and generate.
+    Go(GoArgs),
     /// Train a BPE tokenizer from a lyrics directory.
     Tokenizer(TokenizerArgs),
     /// Train a GPT model on tokenized lyrics.
     Train(TrainArgs),
     /// Generate lyrics from a trained checkpoint.
+    #[command(alias = "gen")]
     Generate(GenerateArgs),
+    /// Download lyrics for the configured artists.
+    #[command(alias = "fetch-lyrics")]
+    Fetch(FetchLyricsArgs),
+    /// Export a trained checkpoint to GGUF for Ollama.
+    #[command(alias = "export-gguf")]
+    Export(ExportGgufArgs),
 }
 
 #[derive(Args)]
@@ -41,6 +71,67 @@ struct TokenizerArgs {
 
     /// Output tokenizer file.
     #[arg(long, default_value = "tokenizer.json")]
+    output: PathBuf,
+}
+
+#[derive(Args)]
+struct GoArgs {
+    /// Directory containing .txt lyric files.
+    #[arg(long, default_value = "data/lyrics")]
+    data: PathBuf,
+
+    /// Directory for checkpoints.
+    #[arg(long, default_value = "checkpoints/grungegpt")]
+    out_dir: PathBuf,
+
+    /// Number of optimizer steps.
+    #[arg(long, default_value_t = 500)]
+    steps: usize,
+
+    /// Prompt used for the final generation test.
+    #[arg(long, default_value = "Bones in the river")]
+    prompt: String,
+
+    /// Maximum tokens to generate in the final test.
+    #[arg(long, default_value_t = 100)]
+    max_tokens: usize,
+
+    /// Maximum songs to fetch per artist when lyrics are missing.
+    #[arg(long, default_value_t = 120)]
+    max_songs: usize,
+
+    /// Device to use: cpu, cuda, or auto.
+    #[arg(long, value_enum, default_value_t = DeviceChoice::Auto)]
+    device: DeviceChoice,
+}
+
+#[derive(Args)]
+struct FetchLyricsArgs {
+    /// Directory where artist lyric folders are written.
+    #[arg(long, default_value = "data/lyrics")]
+    out_dir: PathBuf,
+
+    /// Maximum songs to keep per artist.
+    #[arg(long, default_value_t = 120)]
+    max_songs: usize,
+}
+
+#[derive(Args)]
+struct ExportGgufArgs {
+    /// Model configuration file.
+    #[arg(long, default_value = "checkpoints/grungegpt/config.json")]
+    config: PathBuf,
+
+    /// Model weights in safetensors format.
+    #[arg(long, default_value = "checkpoints/grungegpt/model.safetensors")]
+    checkpoint: PathBuf,
+
+    /// Tokenizer file.
+    #[arg(long, default_value = "checkpoints/grungegpt/tokenizer.json")]
+    tokenizer: PathBuf,
+
+    /// Output GGUF file.
+    #[arg(long, default_value = "grungegpt.gguf")]
     output: PathBuf,
 }
 
@@ -103,8 +194,8 @@ struct TrainArgs {
     seed: u64,
 
     /// Device to use: cpu, cuda, or auto.
-    #[arg(long, default_value = "auto")]
-    device: String,
+    #[arg(long, value_enum, default_value_t = DeviceChoice::Auto)]
+    device: DeviceChoice,
 }
 
 #[derive(Args)]
@@ -142,17 +233,74 @@ struct GenerateArgs {
     seed: u64,
 
     /// Device to use: cpu, cuda, or auto.
-    #[arg(long, default_value = "auto")]
-    device: String,
+    #[arg(long, value_enum, default_value_t = DeviceChoice::Auto)]
+    device: DeviceChoice,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Command::Go(args) => run_go(args),
         Command::Tokenizer(args) => run_tokenizer(args),
         Command::Train(args) => run_train(args),
         Command::Generate(args) => run_generate(args),
+        Command::Fetch(args) => run_fetch_lyrics(args),
+        Command::Export(args) => run_export_gguf(args),
     }
+}
+
+fn run_go(args: GoArgs) -> Result<()> {
+    if lyrics_file_count(&args.data)? <= 1 {
+        println!("no lyrics found, downloading now");
+        fetch_lyrics(&args.data, args.max_songs)?;
+    }
+
+    let train_args = TrainArgs {
+        data: args.data.clone(),
+        tokenizer: None,
+        merges: 512,
+        out_dir: args.out_dir.clone(),
+        steps: args.steps,
+        batch_size: 8,
+        block_size: 64,
+        n_layer: 2,
+        n_embd: 64,
+        n_head: 4,
+        dropout: 0.1,
+        learning_rate: 0.001,
+        eval_every: 100,
+        seed: 42,
+        device: args.device,
+    };
+    run_train(train_args)?;
+
+    let generate_args = GenerateArgs {
+        config: args.out_dir.join("config.json"),
+        checkpoint: args.out_dir.join("model.safetensors"),
+        tokenizer: args.out_dir.join("tokenizer.json"),
+        prompt: args.prompt,
+        max_tokens: args.max_tokens,
+        temperature: 0.8,
+        top_k: Some(40),
+        seed: 42,
+        device: args.device,
+    };
+    run_generate(generate_args)?;
+    println!("done");
+    Ok(())
+}
+
+fn run_export_gguf(args: ExportGgufArgs) -> Result<()> {
+    let tokenizer = Bpe::load(&args.tokenizer)?;
+    export_gguf(&args.config, &args.checkpoint, &tokenizer, &args.output)?;
+    println!("exported GGUF model to {}", args.output.display());
+    Ok(())
+}
+
+fn run_fetch_lyrics(args: FetchLyricsArgs) -> Result<()> {
+    let written = fetch_lyrics(&args.out_dir, args.max_songs)?;
+    println!("downloaded lyrics for {} artists", written.len());
+    Ok(())
 }
 
 fn run_tokenizer(args: TokenizerArgs) -> Result<()> {
@@ -184,7 +332,7 @@ fn run_train(args: TrainArgs) -> Result<()> {
         args.dropout,
     );
 
-    let device = resolve_device(&args.device)?;
+    let device = args.device.resolve()?;
     let train_config = TrainConfig {
         batch_size: args.batch_size,
         steps: args.steps,
@@ -213,7 +361,7 @@ fn run_train(args: TrainArgs) -> Result<()> {
 
 fn run_generate(args: GenerateArgs) -> Result<()> {
     let tokenizer = Bpe::load(&args.tokenizer)?;
-    let device = resolve_device(&args.device)?;
+    let device = args.device.resolve()?;
     let model = load_checkpoint(&args.config, &args.checkpoint, &device)?;
     let config = GenerateConfig {
         max_tokens: args.max_tokens,
@@ -225,13 +373,4 @@ fn run_generate(args: GenerateArgs) -> Result<()> {
     let text = generate(&model, &tokenizer, &args.prompt, &config, &device)?;
     println!("{text}");
     Ok(())
-}
-
-fn resolve_device(name: &str) -> Result<Device> {
-    match name {
-        "cpu" => Ok(Device::Cpu),
-        "cuda" => Ok(Device::new_cuda(0)?),
-        "auto" => Ok(Device::cuda_if_available(0)?),
-        other => anyhow::bail!("unsupported device {other}, use cpu, cuda, or auto"),
-    }
 }
