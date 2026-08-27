@@ -177,13 +177,7 @@ impl Bpe {
     ///
     /// See the BPE paper <https://arxiv.org/abs/1508.07909>.
     pub fn train(texts: &[String], num_merges: usize) -> Self {
-        let mut word_freq: HashMap<String, usize> = HashMap::new();
-        for text in texts {
-            for word in Self::pretokenize(text) {
-                *word_freq.entry(word).or_insert(0) += 1;
-            }
-        }
-
+        let word_freq = Self::count_word_frequencies(texts);
         let mut words: Vec<SymbolWord> = word_freq
             .into_iter()
             .map(|(word, freq)| SymbolWord {
@@ -192,107 +186,41 @@ impl Bpe {
             })
             .collect();
 
-        let mut vocab: Vec<String> = vec![
-            BOS_TOKEN.to_string(),
-            EOS_TOKEN.to_string(),
-            UNK_TOKEN.to_string(),
-        ];
-        let mut seen = vocab
-            .iter()
-            .cloned()
-            .collect::<std::collections::HashSet<_>>();
-
-        for word in &words {
-            for symbol in &word.symbols {
-                if seen.insert(symbol.clone()) {
-                    vocab.push(symbol.clone());
-                }
-            }
-        }
-
-        let mut pair_counts: HashMap<(String, String), usize> = HashMap::new();
-        let mut pair_to_words: HashMap<(String, String), Vec<usize>> = HashMap::new();
-        for (index, word) in words.iter().enumerate() {
-            for pair in word.symbols.windows(2) {
-                let key = (pair[0].clone(), pair[1].clone());
-                *pair_counts.entry(key.clone()).or_insert(0) += word.freq;
-                pair_to_words.entry(key).or_default().push(index);
-            }
-        }
+        let mut vocab = Self::seed_vocabulary(&words);
+        let mut pair_counts = HashMap::new();
+        let mut pair_to_words = HashMap::new();
+        Self::count_pair_stats(&words, &mut pair_counts, &mut pair_to_words);
 
         let mut merges = Vec::with_capacity(num_merges);
-        let mut processed = vec![false; words.len()];
 
         for _ in 0..num_merges {
-            processed.fill(false);
-            let Some((left, right)) = pair_counts
-                .iter()
-                .max_by_key(|(_, count)| **count)
-                .map(|((left, right), _)| (left.clone(), right.clone()))
-            else {
-                break;
+            let (left, right) = match Self::most_frequent_pair(&pair_counts) {
+                Some(pair) => pair,
+                None => break,
             };
 
             let merged = format!("{left}{right}");
-            if seen.insert(merged.clone()) {
-                vocab.push(merged.clone());
-            }
+            vocab.push(merged.clone());
             merges.push(BpeTrio {
                 left: left.clone(),
                 right: right.clone(),
                 merged: merged.clone(),
             });
 
-            let Some(indices) = pair_to_words.get(&(left.clone(), right.clone())).cloned() else {
-                break;
-            };
+            let affected = pair_to_words
+                .get(&(left.clone(), right.clone()))
+                .cloned()
+                .unwrap_or_default();
 
-            for index in indices {
-                if processed[index] {
-                    continue;
-                }
-                processed[index] = true;
-
-                let word = &mut words[index];
-                if !word
-                    .symbols
-                    .windows(2)
-                    .any(|pair| pair[0] == left && pair[1] == right)
-                {
-                    continue;
-                }
-
-                for pair in word.symbols.windows(2) {
-                    let key = (pair[0].clone(), pair[1].clone());
-                    let count = pair_counts.entry(key.clone()).or_insert(0);
-                    *count = count.saturating_sub(word.freq);
-                    if *count == 0 {
-                        pair_counts.remove(&key);
-                    }
-                }
-
-                let mut new_symbols = Vec::with_capacity(word.symbols.len());
-                let mut index_in_word = 0;
-                while index_in_word < word.symbols.len() {
-                    if index_in_word + 1 < word.symbols.len()
-                        && word.symbols[index_in_word] == left
-                        && word.symbols[index_in_word + 1] == right
-                    {
-                        new_symbols.push(merged.clone());
-                        index_in_word += 2;
-                    } else {
-                        new_symbols.push(word.symbols[index_in_word].clone());
-                        index_in_word += 1;
-                    }
-                }
-
-                for pair in new_symbols.windows(2) {
-                    let key = (pair[0].clone(), pair[1].clone());
-                    *pair_counts.entry(key.clone()).or_insert(0) += word.freq;
-                    pair_to_words.entry(key).or_default().push(index);
-                }
-                word.symbols = new_symbols;
-            }
+            Self::apply_merge_to_words(
+                &mut words,
+                &affected,
+                &left,
+                &right,
+                &merged,
+                &mut pair_counts,
+                &mut pair_to_words,
+            );
         }
 
         let mut tokenizer = Self {
@@ -303,6 +231,148 @@ impl Bpe {
         };
         tokenizer.rebuild_index();
         tokenizer
+    }
+
+    /// Count how often each pre-tokenized word appears across all texts.
+    fn count_word_frequencies(texts: &[String]) -> HashMap<String, usize> {
+        texts
+            .iter()
+            .flat_map(|text| Self::pretokenize(text))
+            .fold(HashMap::new(), |mut acc, word| {
+                *acc.entry(word).or_insert(0) += 1;
+                acc
+            })
+    }
+
+    /// Build the initial vocabulary from special tokens and all character symbols.
+    fn seed_vocabulary(words: &[SymbolWord]) -> Vec<String> {
+        let mut vocab = vec![
+            BOS_TOKEN.to_string(),
+            EOS_TOKEN.to_string(),
+            UNK_TOKEN.to_string(),
+        ];
+        let mut seen: std::collections::HashSet<String> = vocab.iter().cloned().collect();
+
+        for word in words {
+            for symbol in &word.symbols {
+                if seen.insert(symbol.clone()) {
+                    vocab.push(symbol.clone());
+                }
+            }
+        }
+        vocab
+    }
+
+    /// Count weighted adjacent symbol pairs and map each pair to affected word indices.
+    fn count_pair_stats(
+        words: &[SymbolWord],
+        pair_counts: &mut HashMap<(String, String), usize>,
+        pair_to_words: &mut HashMap<(String, String), Vec<usize>>,
+    ) {
+        for (index, word) in words.iter().enumerate() {
+            for pair in word.symbols.windows(2) {
+                let key = (pair[0].clone(), pair[1].clone());
+                *pair_counts.entry(key.clone()).or_insert(0) += word.freq;
+                pair_to_words.entry(key).or_default().push(index);
+            }
+        }
+    }
+
+    /// Find the most frequent symbol pair, or `None` when all counts are zero.
+    fn most_frequent_pair(
+        pair_counts: &HashMap<(String, String), usize>,
+    ) -> Option<(String, String)> {
+        pair_counts
+            .iter()
+            .filter(|(_, count)| **count > 0)
+            .max_by_key(|(_, count)| **count)
+            .map(|((left, right), _)| (left.clone(), right.clone()))
+    }
+
+    /// Apply a merge rule to all affected words, updating pair statistics in place.
+    fn apply_merge_to_words(
+        words: &mut [SymbolWord],
+        affected: &[usize],
+        left: &str,
+        right: &str,
+        merged: &str,
+        pair_counts: &mut HashMap<(String, String), usize>,
+        pair_to_words: &mut HashMap<(String, String), Vec<usize>>,
+    ) {
+        let mut seen = std::collections::HashSet::new();
+
+        for &index in affected {
+            if !seen.insert(index) {
+                continue;
+            }
+
+            let has_pair = words[index]
+                .symbols
+                .windows(2)
+                .any(|pair| pair[0] == left && pair[1] == right);
+
+            if !has_pair {
+                continue;
+            }
+
+            let freq = words[index].freq;
+            Self::decrement_old_pairs(&words[index].symbols, freq, pair_counts);
+
+            let new_symbols = Self::merge_pair_in_word(&words[index].symbols, left, right, merged);
+            Self::increment_new_pairs(&new_symbols, freq, index, pair_counts, pair_to_words);
+            words[index].symbols = new_symbols;
+        }
+    }
+
+    /// Subtract word frequency from all adjacent pair counts, removing zeroed entries.
+    fn decrement_old_pairs(
+        symbols: &[String],
+        freq: usize,
+        pair_counts: &mut HashMap<(String, String), usize>,
+    ) {
+        for pair in symbols.windows(2) {
+            let key = (pair[0].clone(), pair[1].clone());
+            let count = pair_counts.entry(key.clone()).or_insert(0);
+            *count = count.saturating_sub(freq);
+            if *count == 0 {
+                pair_counts.remove(&key);
+            }
+        }
+    }
+
+    /// Add word frequency to pair counts for all new adjacent pairs after merging.
+    fn increment_new_pairs(
+        symbols: &[String],
+        freq: usize,
+        word_index: usize,
+        pair_counts: &mut HashMap<(String, String), usize>,
+        pair_to_words: &mut HashMap<(String, String), Vec<usize>>,
+    ) {
+        for pair in symbols.windows(2) {
+            let key = (pair[0].clone(), pair[1].clone());
+            *pair_counts.entry(key.clone()).or_insert(0) += freq;
+            pair_to_words.entry(key).or_default().push(word_index);
+        }
+    }
+
+    /// Replace every non-overlapping `(left, right)` in a symbol slice with `merged`.
+    ///
+    /// Uses recursive slice pattern matching — zero `if`/`else`, zero loops.
+    /// See the coding standards example for the canonical BPE merge pattern.
+    fn merge_pair_in_word(symbols: &[String], left: &str, right: &str, merged: &str) -> Vec<String> {
+        match symbols {
+            [head, second, tail @ ..] if head == left && second == right => {
+                let mut result = vec![merged.to_string()];
+                result.extend(Self::merge_pair_in_word(tail, left, right, merged));
+                result
+            }
+            [head, tail @ ..] => {
+                let mut result = vec![head.clone()];
+                result.extend(Self::merge_pair_in_word(tail, left, right, merged));
+                result
+            }
+            [] => vec![],
+        }
     }
 
     /// Encode text into byte level token strings.

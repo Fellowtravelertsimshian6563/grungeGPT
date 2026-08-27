@@ -26,7 +26,7 @@
 //! - Ollama Modelfile docs: <https://docs.ollama.com/modelfile>
 //! - Hugging Face safetensors format: <https://github.com/huggingface/safetensors>
 
-use crate::model::{Gpt, GptConfig};
+use crate::model::{Gpt, GptConfig, LAYER_NORM_EPSILON, MLP_EXPANSION_FACTOR, QKV_PROJECTION_COUNT};
 use crate::tokenizer::Bpe;
 use anyhow::{Context, Result};
 use candle_core::{DType, Device};
@@ -44,6 +44,10 @@ const TYPE_BOOL: u32 = 7;
 const TYPE_STRING: u32 = 8;
 const TYPE_ARRAY: u32 = 9;
 const TYPE_F32_TENSOR: u32 = 0;
+
+/// GGUF file type 0 means all tensors are stored as f32 (no quantization).
+/// See <https://github.com/ggerganov/llama.cpp/blob/master/gguf-py/gguf/constants.py>.
+const GGUF_FILE_TYPE_ALL_F32: u32 = 0;
 
 /// One tensor in the GGUF file.
 struct TensorEntry {
@@ -190,7 +194,8 @@ fn map_tensor_name(
     context_length: usize,
 ) -> Option<(String, Vec<u64>)> {
     let n_embd = config.n_embd as u64;
-    let n_ff = (4 * config.n_embd) as u64;
+    let n_qkv = (QKV_PROJECTION_COUNT as u64) * n_embd;
+    let n_ff = (MLP_EXPANSION_FACTOR as u64) * n_embd;
     let n_vocab = config.vocab_size as u64;
     let n_ctx = context_length as u64;
 
@@ -210,9 +215,9 @@ fn map_tensor_name(
                 "ln1.weight" => Some((format!("{prefix}attn_norm.weight"), vec![n_embd])),
                 "ln1.bias" => Some((format!("{prefix}attn_norm.bias"), vec![n_embd])),
                 "attn.c_attn.weight" => {
-                    Some((format!("{prefix}attn_qkv.weight"), vec![3 * n_embd, n_embd]))
+                    Some((format!("{prefix}attn_qkv.weight"), vec![n_qkv, n_embd]))
                 }
-                "attn.c_attn.bias" => Some((format!("{prefix}attn_qkv.bias"), vec![3 * n_embd])),
+                "attn.c_attn.bias" => Some((format!("{prefix}attn_qkv.bias"), vec![n_qkv])),
                 "attn.c_proj.weight" => {
                     Some((format!("{prefix}attn_output.weight"), vec![n_embd, n_embd]))
                 }
@@ -291,17 +296,17 @@ fn write_metadata<W: Write>(
 ) -> Result<()> {
     write_string_value(writer, "general.architecture", "gpt2")?;
     write_string_value(writer, "general.name", "grungegpt")?;
-    write_u32_value(writer, "general.file_type", 0)?;
+    write_u32_value(writer, "general.file_type", GGUF_FILE_TYPE_ALL_F32)?;
     write_u32_value(writer, "gpt2.context_length", context_length as u32)?;
     write_u32_value(writer, "gpt2.embedding_length", config.n_embd as u32)?;
     write_u32_value(writer, "gpt2.block_count", config.n_layer as u32)?;
     write_u32_value(
         writer,
         "gpt2.feed_forward_length",
-        (4 * config.n_embd) as u32,
+        (MLP_EXPANSION_FACTOR * config.n_embd) as u32,
     )?;
     write_u32_value(writer, "gpt2.attention.head_count", config.n_head as u32)?;
-    write_f32_value(writer, "gpt2.attention.layer_norm_epsilon", 1e-5)?;
+    write_f32_value(writer, "gpt2.attention.layer_norm_epsilon", LAYER_NORM_EPSILON as f32)?;
     write_bool_value(writer, "gpt2.attention.causal", true)?;
     write_string_value(writer, "tokenizer.ggml.model", "gpt2")?;
     write_string_value(writer, "tokenizer.ggml.pre", "gpt-2")?;

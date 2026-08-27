@@ -31,6 +31,23 @@ use grungegpt::tokenizer::Bpe;
 use grungegpt::trainer::{TrainConfig, train_model};
 use std::path::PathBuf;
 
+/// Default hyperparameters for the `go` quick-start pipeline.
+///
+/// These are intentionally small so the demo finishes quickly.
+/// For serious training, use the `train` command with explicit flags.
+const GO_MERGES: usize = 512;
+const GO_BATCH_SIZE: usize = 8;
+const GO_BLOCK_SIZE: usize = 64;
+const GO_N_LAYER: usize = 2;
+const GO_N_EMBD: usize = 64;
+const GO_N_HEAD: usize = 4;
+const GO_DROPOUT: f32 = 0.1;
+const GO_LEARNING_RATE: f64 = 0.001;
+const GO_EVAL_EVERY: usize = 100;
+const GO_SEED: u64 = 42;
+const GO_TEMPERATURE: f64 = 0.8;
+const GO_TOP_K: usize = 40;
+
 /// Device selection for training and generation.
 ///
 /// # Variants
@@ -242,6 +259,10 @@ struct TrainArgs {
     #[arg(long, default_value_t = 42)]
     seed: u64,
 
+    /// Write loss history as JSON for plotting.
+    #[arg(long)]
+    loss_log: Option<PathBuf>,
+
     /// Device to use: cpu, cuda, or auto.
     #[arg(long, value_enum, default_value_t = DeviceChoice::Auto)]
     device: DeviceChoice,
@@ -310,18 +331,19 @@ fn run_go(args: GoArgs) -> Result<()> {
         data: args.data.clone(),
         tokenizer: None,
         resume: None,
-        merges: 512,
+        merges: GO_MERGES,
         out_dir: args.out_dir.clone(),
         steps: args.steps,
-        batch_size: 8,
-        block_size: 64,
-        n_layer: 2,
-        n_embd: 64,
-        n_head: 4,
-        dropout: 0.1,
-        learning_rate: 0.001,
-        eval_every: 100,
-        seed: 42,
+        batch_size: GO_BATCH_SIZE,
+        block_size: GO_BLOCK_SIZE,
+        n_layer: GO_N_LAYER,
+        n_embd: GO_N_EMBD,
+        n_head: GO_N_HEAD,
+        dropout: GO_DROPOUT,
+        learning_rate: GO_LEARNING_RATE,
+        eval_every: GO_EVAL_EVERY,
+        seed: GO_SEED,
+        loss_log: None,
         device: args.device,
     };
     run_train(train_args)?;
@@ -332,9 +354,9 @@ fn run_go(args: GoArgs) -> Result<()> {
         tokenizer: args.out_dir.join("tokenizer.json"),
         prompt: args.prompt,
         max_tokens: args.max_tokens,
-        temperature: 0.8,
-        top_k: Some(40),
-        seed: 42,
+        temperature: GO_TEMPERATURE,
+        top_k: Some(GO_TOP_K),
+        seed: GO_SEED,
         device: args.device,
     };
     run_generate(generate_args)?;
@@ -401,6 +423,7 @@ fn run_train(args: TrainArgs) -> Result<()> {
         learning_rate: args.learning_rate,
         eval_every: args.eval_every,
         seed: args.seed,
+        loss_log: args.loss_log.clone(),
     };
 
     println!(

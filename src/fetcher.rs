@@ -28,23 +28,56 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
+/// iTunes Search API endpoint for song title discovery.
+/// See <https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/iTuneSearchAPI/>.
+const ITUNES_SEARCH_URL: &str = "https://itunes.apple.com/search";
+
+/// lyrics.ovh API endpoint for lyric text retrieval.
+/// See <https://lyricsovh.docs.apiary.io>.
+const LYRICS_OVH_URL: &str = "https://api.lyrics.ovh/v1";
+
+/// Maximum song results to request from the iTunes search API per artist.
+const ITUNES_SEARCH_LIMIT: u32 = 200;
+
+/// Rate limit delay between consecutive lyrics API requests.
+const REQUEST_DELAY_MS: u64 = 250;
+
 /// Artists and directory slugs used by the lyrics downloader.
 ///
-/// Each entry is `(display name, directory slug)`.
+/// Each entry is `(display name, directory slug)`. The list spans grunge,
+/// alternative rock, classic rock, and metal to give the model a broad
+/// vocabulary of lyrical styles and themes.
 pub const ARTISTS: &[(&str, &str)] = &[
+    // Grunge
     ("Nirvana", "nirvana"),
     ("Alice in Chains", "alice-in-chains"),
     ("Pearl Jam", "pearl-jam"),
+    ("Soundgarden", "soundgarden"),
+    ("Stone Temple Pilots", "stone-temple-pilots"),
+    ("Bush", "bush"),
+    ("Silverchair", "silverchair"),
+    // Alternative rock
+    ("Smashing Pumpkins", "smashing-pumpkins"),
+    ("Radiohead", "radiohead"),
+    ("Foo Fighters", "foo-fighters"),
+    ("Red Hot Chili Peppers", "red-hot-chili-peppers"),
+    ("Nine Inch Nails", "nine-inch-nails"),
+    ("Tool", "tool"),
+    ("Audioslave", "audioslave"),
+    // Classic rock
     ("The Beatles", "the-beatles"),
     ("The Rolling Stones", "the-rolling-stones"),
-    ("Oasis", "oasis"),
     ("Led Zeppelin", "led-zeppelin"),
-    ("Eagles", "eagles"),
-    ("Seether", "seether"),
-    ("Metallica", "metallica"),
-    ("Soundgarden", "soundgarden"),
-    ("Audioslave", "audioslave"),
+    ("Pink Floyd", "pink-floyd"),
+    ("Oasis", "oasis"),
     ("Guns N' Roses", "guns-n-roses"),
+    ("Eagles", "eagles"),
+    ("Fleetwood Mac", "fleetwood-mac"),
+    ("The Doors", "the-doors"),
+    ("Black Sabbath", "black-sabbath"),
+    // Hard rock and metal
+    ("Metallica", "metallica"),
+    ("Seether", "seether"),
 ];
 
 /// Download lyrics for all configured artists into `out_dir`.
@@ -67,46 +100,75 @@ pub const ARTISTS: &[(&str, &str)] = &[
 /// For each artist, song titles are fetched from the iTunes Search API and
 /// lyrics are fetched from lyrics.ovh. Non-lyric noise titles are filtered out.
 pub fn fetch_lyrics(out_dir: &Path, max_songs: usize) -> Result<Vec<PathBuf>> {
-    let mut written = Vec::new();
-    for (artist, slug) in ARTISTS {
-        let artist_dir = out_dir.join(slug);
-        std::fs::create_dir_all(&artist_dir)
-            .with_context(|| format!("failed to create {}", artist_dir.display()))?;
-        let output = artist_dir.join(format!("{slug}.txt"));
-        println!("=== {artist}");
-
-        let titles = match fetch_titles(artist) {
-            Ok(titles) => titles,
-            Err(error) => {
-                eprintln!("  failed to fetch titles for {artist}: {error}");
-                continue;
-            }
-        };
-        println!("  found {} candidate titles", titles.len());
-
-        let mut file = std::fs::File::create(&output)
-            .with_context(|| format!("failed to create {}", output.display()))?;
-        let mut count = 0usize;
-        for title in titles {
-            if count >= max_songs {
-                break;
-            }
-            let lyrics = match fetch_lyrics_for(artist, &title) {
-                Ok(Some(lyrics)) => lyrics,
-                Ok(None) => continue,
+    let written: Vec<PathBuf> = ARTISTS
+        .iter()
+        .filter_map(|(artist, slug)| {
+            match fetch_artist_lyrics(out_dir, artist, slug, max_songs) {
+                Ok(path) => Some(path),
                 Err(error) => {
-                    eprintln!("  failed for {title}: {error}");
-                    continue;
+                    eprintln!("=== {artist}: skipped ({error})");
+                    None
                 }
-            };
-            writeln!(file, "# {title}\n\n{lyrics}\n")?;
-            count += 1;
-            thread::sleep(Duration::from_millis(250));
-        }
-        println!("  wrote {count} songs to {}", output.display());
-        written.push(output);
-    }
+            }
+        })
+        .collect();
     Ok(written)
+}
+
+/// Download lyrics for a single artist and write them to a file.
+///
+/// # Parameters
+///
+/// - `out_dir`: root directory for artist subdirectories.
+/// - `artist`: display name used for API queries.
+/// - `slug`: directory and file name slug.
+/// - `max_songs`: maximum lyrics to save.
+///
+/// # Returns
+///
+/// Path to the written lyric file.
+///
+/// # Errors
+///
+/// Returns an error when the directory or file cannot be created, or when
+/// title fetching fails entirely.
+fn fetch_artist_lyrics(
+    out_dir: &Path,
+    artist: &str,
+    slug: &str,
+    max_songs: usize,
+) -> Result<PathBuf> {
+    let artist_dir = out_dir.join(slug);
+    std::fs::create_dir_all(&artist_dir)
+        .with_context(|| format!("failed to create {}", artist_dir.display()))?;
+    let output = artist_dir.join(format!("{slug}.txt"));
+    println!("=== {artist}");
+
+    let titles = fetch_titles(artist)?;
+    println!("  found {} candidate titles", titles.len());
+
+    let mut file = std::fs::File::create(&output)
+        .with_context(|| format!("failed to create {}", output.display()))?;
+
+    let count = titles
+        .iter()
+        .take(max_songs)
+        .filter_map(|title| match fetch_lyrics_for(artist, title) {
+            Ok(Some(lyrics)) => {
+                let _ = writeln!(file, "# {title}\n\n{lyrics}\n");
+                thread::sleep(Duration::from_millis(REQUEST_DELAY_MS));
+                Some(())
+            }
+            Ok(None) => None,
+            Err(error) => {
+                eprintln!("  failed for {title}: {error}");
+                None
+            }
+        })
+        .count();
+
+    println!("  wrote {count} songs to {}", output.display());
+    Ok(output)
 }
 
 /// Fetch candidate song titles for an artist from the iTunes Search API.
@@ -124,7 +186,9 @@ pub fn fetch_lyrics(out_dir: &Path, max_songs: usize) -> Result<Vec<PathBuf>> {
 /// Returns an error when the iTunes request fails or the response is invalid.
 fn fetch_titles(artist: &str) -> Result<Vec<String>> {
     let encoded = urlencoding::encode(artist);
-    let url = format!("https://itunes.apple.com/search?term={encoded}&entity=song&limit=200");
+    let url = format!(
+        "{ITUNES_SEARCH_URL}?term={encoded}&entity=song&limit={ITUNES_SEARCH_LIMIT}"
+    );
     let body = ureq::get(&url)
         .call()
         .with_context(|| format!("iTunes request failed for {artist}"))?
@@ -134,18 +198,16 @@ fn fetch_titles(artist: &str) -> Result<Vec<String>> {
 
     let mut titles = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    if let Some(results) = json["results"].as_array() {
-        for result in results {
-            let Some(title) = result["trackName"].as_str() else {
-                continue;
-            };
-            if is_noise(title) {
-                continue;
-            }
-            let key = title.trim().to_lowercase();
-            if !key.is_empty() && seen.insert(key) {
-                titles.push(title.trim().to_string());
-            }
+    for result in json["results"].as_array().into_iter().flatten() {
+        let Some(title) = result["trackName"].as_str().map(str::trim) else {
+            continue;
+        };
+        if title.is_empty() || is_noise(title) {
+            continue;
+        }
+        let key = title.to_lowercase();
+        if seen.insert(key) {
+            titles.push(title.to_string());
         }
     }
     Ok(titles)
@@ -165,7 +227,7 @@ fn fetch_titles(artist: &str) -> Result<Vec<String>> {
 fn fetch_lyrics_for(artist: &str, title: &str) -> Result<Option<String>> {
     let artist = urlencoding::encode(artist);
     let title = urlencoding::encode(title);
-    let url = format!("https://api.lyrics.ovh/v1/{artist}/{title}");
+    let url = format!("{LYRICS_OVH_URL}/{artist}/{title}");
     match ureq::get(&url).call() {
         Ok(response) => {
             let body = response

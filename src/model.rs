@@ -43,6 +43,20 @@ use candle_nn::{Embedding, LayerNorm, Linear, Module, VarBuilder, VarMap};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+/// Layer normalization epsilon for numerical stability.
+///
+/// See <https://arxiv.org/abs/1607.06450>.
+pub const LAYER_NORM_EPSILON: f64 = 1e-5;
+
+/// MLP hidden layer expansion factor relative to `n_embd`.
+///
+/// GPT-2 uses a 4x expansion in the feed-forward network.
+/// See <https://d4mucfpksywv.cloudfront.net/better-language-models/language-models.pdf>.
+pub const MLP_EXPANSION_FACTOR: usize = 4;
+
+/// Number of projections in the fused QKV linear layer (query + key + value).
+pub const QKV_PROJECTION_COUNT: usize = 3;
+
 /// Hyperparameters for the decoder-only transformer.
 ///
 /// - `vocab_size`: number of tokens in the vocabulary.
@@ -130,7 +144,7 @@ impl CausalSelfAttention {
     ///
     /// Returns an error when the linear layers cannot be created.
     fn new(vb: VarBuilder, config: &GptConfig) -> CandleResult<Self> {
-        let c_attn = candle_nn::linear(config.n_embd, 3 * config.n_embd, vb.pp("c_attn"))?;
+        let c_attn = candle_nn::linear(config.n_embd, QKV_PROJECTION_COUNT * config.n_embd, vb.pp("c_attn"))?;
         let c_proj = candle_nn::linear(config.n_embd, config.n_embd, vb.pp("c_proj"))?;
         Ok(Self {
             c_attn,
@@ -162,7 +176,8 @@ impl CausalSelfAttention {
 
         let q = qkv.narrow(2, 0, self.n_embd)?;
         let k = qkv.narrow(2, self.n_embd, self.n_embd)?;
-        let v = qkv.narrow(2, 2 * self.n_embd, self.n_embd)?;
+        let v_offset = (QKV_PROJECTION_COUNT - 1) * self.n_embd;
+        let v = qkv.narrow(2, v_offset, self.n_embd)?;
 
         let q = q
             .reshape((batch, seq, self.n_head, head_dim))?
@@ -182,11 +197,7 @@ impl CausalSelfAttention {
         let mask = causal_mask(seq, x.device())?;
         let attention = attention.broadcast_add(&mask)?;
         let attention = candle_nn::ops::softmax(&attention, D::Minus1)?;
-        let attention = if train && self.dropout > 0.0 {
-            candle_nn::ops::dropout(&attention, self.dropout)?
-        } else {
-            attention
-        };
+        let attention = maybe_dropout(&attention, self.dropout, train)?;
 
         let y = attention.matmul(&v)?;
         let y = y
@@ -194,17 +205,13 @@ impl CausalSelfAttention {
             .contiguous()?
             .reshape((batch, seq, self.n_embd))?;
         let y = self.c_proj.forward(&y)?;
-        if train && self.dropout > 0.0 {
-            candle_nn::ops::dropout(&y, self.dropout)
-        } else {
-            Ok(y)
-        }
+        maybe_dropout(&y, self.dropout, train)
     }
 }
 
 /// Two-layer feed-forward network with GELU activation.
 struct Mlp {
-    /// First linear layer expanding `n_embd` to `4 * n_embd`.
+    /// First linear layer expanding `n_embd` to `MLP_EXPANSION_FACTOR * n_embd`.
     c_fc: Linear,
     /// Second linear layer projecting back to `n_embd`.
     c_proj: Linear,
@@ -224,8 +231,9 @@ impl Mlp {
     ///
     /// Returns an error when the linear layers cannot be created.
     fn new(vb: VarBuilder, config: &GptConfig) -> CandleResult<Self> {
-        let c_fc = candle_nn::linear(config.n_embd, 4 * config.n_embd, vb.pp("c_fc"))?;
-        let c_proj = candle_nn::linear(4 * config.n_embd, config.n_embd, vb.pp("c_proj"))?;
+        let hidden = MLP_EXPANSION_FACTOR * config.n_embd;
+        let c_fc = candle_nn::linear(config.n_embd, hidden, vb.pp("c_fc"))?;
+        let c_proj = candle_nn::linear(hidden, config.n_embd, vb.pp("c_proj"))?;
         Ok(Self {
             c_fc,
             c_proj,
@@ -251,11 +259,7 @@ impl Mlp {
         let x = self.c_fc.forward(x)?;
         let x = x.gelu_erf()?;
         let x = self.c_proj.forward(&x)?;
-        if train && self.dropout > 0.0 {
-            candle_nn::ops::dropout(&x, self.dropout)
-        } else {
-            Ok(x)
-        }
+        maybe_dropout(&x, self.dropout, train)
     }
 }
 
@@ -283,9 +287,9 @@ impl Block {
     ///
     /// Returns an error when any submodule cannot be created.
     fn new(vb: VarBuilder, config: &GptConfig) -> CandleResult<Self> {
-        let ln1 = candle_nn::layer_norm(config.n_embd, 1e-5, vb.pp("ln1"))?;
+        let ln1 = candle_nn::layer_norm(config.n_embd, LAYER_NORM_EPSILON, vb.pp("ln1"))?;
         let attn = CausalSelfAttention::new(vb.pp("attn"), config)?;
-        let ln2 = candle_nn::layer_norm(config.n_embd, 1e-5, vb.pp("ln2"))?;
+        let ln2 = candle_nn::layer_norm(config.n_embd, LAYER_NORM_EPSILON, vb.pp("ln2"))?;
         let mlp = Mlp::new(vb.pp("mlp"), config)?;
         Ok(Self {
             ln1,
@@ -364,7 +368,7 @@ impl Gpt {
             blocks.push(Block::new(vb.pp(format!("h.{index}")), config)?);
         }
 
-        let ln_f = candle_nn::layer_norm(config.n_embd, 1e-5, vb.pp("ln_f"))?;
+        let ln_f = candle_nn::layer_norm(config.n_embd, LAYER_NORM_EPSILON, vb.pp("ln_f"))?;
         let lm_head = candle_nn::linear(config.n_embd, config.vocab_size, vb.pp("lm_head"))?;
 
         Ok(Self {
@@ -403,11 +407,8 @@ impl Gpt {
 
         let token_emb = self.wte.forward(input)?;
         let position_emb = self.wpe.forward(&positions)?;
-        let mut x = (token_emb + position_emb)?;
-
-        if train && self.config.dropout > 0.0 {
-            x = candle_nn::ops::dropout(&x, self.config.dropout)?;
-        }
+        let x = (token_emb + position_emb)?;
+        let mut x = maybe_dropout(&x, self.config.dropout, train)?;
 
         for block in &self.blocks {
             x = block.forward(&x, train)?;
@@ -501,6 +502,17 @@ pub fn load_checkpoint(config_path: &Path, model_path: &Path, device: &Device) -
         .with_context(|| format!("failed to load {}", model_path.display()))?;
     let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
     Ok(Gpt::new(vb, &config)?)
+}
+
+/// Conditionally apply dropout during training.
+///
+/// Returns the input unchanged when `train` is false or `probability` is zero.
+/// See <https://jmlr.org/papers/volume15/srivastava14a/srivastava14a.pdf>.
+fn maybe_dropout(x: &Tensor, probability: f32, train: bool) -> CandleResult<Tensor> {
+    match (train, probability > 0.0) {
+        (true, true) => candle_nn::ops::dropout(x, probability),
+        _ => Ok(x.clone()),
+    }
 }
 
 /// Build a causal mask that prevents attending to future tokens.
