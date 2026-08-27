@@ -253,6 +253,16 @@ impl Bpe {
         ];
         let mut seen: std::collections::HashSet<String> = vocab.iter().cloned().collect();
 
+        // Seed all 256 byte-encoded characters so the vocabulary can represent
+        // any UTF-8 byte, even those absent from the training sample. Without
+        // this, encoding text with unseen bytes produces `<unk>` tokens.
+        for byte in 0u8..=255 {
+            let encoded = BYTE_ENCODER[byte as usize].to_string();
+            if seen.insert(encoded.clone()) {
+                vocab.push(encoded);
+            }
+        }
+
         for word in words {
             for symbol in &word.symbols {
                 if seen.insert(symbol.clone()) {
