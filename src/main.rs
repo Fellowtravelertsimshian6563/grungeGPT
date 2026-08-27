@@ -263,6 +263,14 @@ struct TrainArgs {
     #[arg(long)]
     loss_log: Option<PathBuf>,
 
+    /// Linear warmup steps before cosine decay begins.
+    #[arg(long, default_value_t = 500)]
+    warmup_steps: usize,
+
+    /// Save a checkpoint every N steps (0 to disable).
+    #[arg(long, default_value_t = 5000)]
+    save_every: usize,
+
     /// Device to use: cpu, cuda, or auto.
     #[arg(long, value_enum, default_value_t = DeviceChoice::Auto)]
     device: DeviceChoice,
@@ -344,6 +352,8 @@ fn run_go(args: GoArgs) -> Result<()> {
         eval_every: GO_EVAL_EVERY,
         seed: GO_SEED,
         loss_log: None,
+        warmup_steps: 100,
+        save_every: 0,
         device: args.device,
     };
     run_train(train_args)?;
@@ -424,6 +434,9 @@ fn run_train(args: TrainArgs) -> Result<()> {
         eval_every: args.eval_every,
         seed: args.seed,
         loss_log: args.loss_log.clone(),
+        warmup_steps: args.warmup_steps,
+        save_every: args.save_every,
+        out_dir: Some(args.out_dir.clone()),
     };
 
     println!(

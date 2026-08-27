@@ -28,7 +28,7 @@
 //! - Candle optimizer docs: <https://docs.rs/candle-nn>
 
 use crate::dataset::Dataset;
-use crate::model::{Gpt, GptConfig};
+use crate::model::{Gpt, GptConfig, save_checkpoint};
 use anyhow::{Context, Result};
 use candle_core::{DType, Device};
 use candle_nn::{AdamW, Optimizer, ParamsAdamW, VarBuilder, VarMap};
@@ -47,6 +47,8 @@ pub struct LossEntry {
     pub loss: f32,
     /// Wall-clock seconds since training started.
     pub elapsed: f64,
+    /// Learning rate at this step (after schedule adjustment).
+    pub learning_rate: f64,
 }
 
 /// Training loop configuration.
@@ -56,7 +58,7 @@ pub struct TrainConfig {
     pub batch_size: usize,
     /// Total optimizer steps in this run.
     pub steps: usize,
-    /// AdamW learning rate. See <https://arxiv.org/abs/1412.6980>.
+    /// Peak AdamW learning rate (reached after warmup, then cosine-decayed).
     pub learning_rate: f64,
     /// Print loss every N steps.
     pub eval_every: usize,
@@ -64,6 +66,27 @@ pub struct TrainConfig {
     pub seed: u64,
     /// Optional path to write loss history as JSON for plotting.
     pub loss_log: Option<PathBuf>,
+    /// Number of linear warmup steps before cosine decay begins.
+    pub warmup_steps: usize,
+    /// Save a checkpoint every N steps (0 to disable).
+    pub save_every: usize,
+    /// Directory for periodic checkpoints.
+    pub out_dir: Option<PathBuf>,
+}
+
+/// Compute the learning rate for a given step using linear warmup + cosine decay.
+///
+/// See "Attention Is All You Need" <https://arxiv.org/abs/1706.03762> for the
+/// warmup idea, and "SGDR" <https://arxiv.org/abs/1608.03983> for cosine decay.
+fn cosine_schedule(step: usize, warmup: usize, total: usize, peak_lr: f64) -> f64 {
+    match step {
+        s if s < warmup => peak_lr * (s as f64 / warmup.max(1) as f64),
+        s if s >= total => 0.0,
+        s => {
+            let progress = (s - warmup) as f64 / (total - warmup).max(1) as f64;
+            peak_lr * 0.5 * (1.0 + (std::f64::consts::PI * progress).cos())
+        }
+    }
 }
 
 /// Train a GPT model on a dataset and return the weights and model.
@@ -110,8 +133,11 @@ pub fn train_model(
     let vb = VarBuilder::from_varmap(&varmap, DType::F32, device);
     let model = Gpt::new(vb, config)?;
 
+    let warmup = train_config.warmup_steps;
+    let peak_lr = train_config.learning_rate;
+    let initial_lr = cosine_schedule(1, warmup, train_config.steps, peak_lr);
     let params = ParamsAdamW {
-        lr: train_config.learning_rate,
+        lr: initial_lr,
         ..Default::default()
     };
     let mut optimizer = AdamW::new(varmap.all_vars(), params)?;
@@ -121,6 +147,9 @@ pub fn train_model(
     let tokens_per_step = train_config.batch_size * dataset.block_size();
 
     for step in 1..=train_config.steps {
+        let current_lr = cosine_schedule(step, warmup, train_config.steps, peak_lr);
+        optimizer.set_learning_rate(current_lr);
+
         let (input, target) = dataset.sample_batch(&mut rng, train_config.batch_size, device)?;
         let logits = model.forward(&input, true)?;
         let (batch, seq, vocab) = logits.dims3()?;
@@ -129,18 +158,27 @@ pub fn train_model(
         let loss = candle_nn::loss::cross_entropy(&logits, &target)?;
         optimizer.backward_step(&loss)?;
 
+        if train_config.save_every > 0
+            && step % train_config.save_every == 0
+            && let Some(ref dir) = train_config.out_dir
+        {
+            save_checkpoint(&varmap, config, dir)?;
+            println!("  checkpoint saved at step {step}");
+        }
+
         if step % train_config.eval_every == 0 || step == train_config.steps {
             let loss_value = loss.to_scalar::<f32>()?;
             let elapsed = started.elapsed().as_secs_f64();
             let tokens_per_sec = (step * tokens_per_step) as f64 / elapsed;
             println!(
-                "step {step:>6}/{} loss {loss_value:8.4} elapsed {elapsed:7.2}s ({tokens_per_sec:.0} tok/s)",
+                "step {step:>6}/{} loss {loss_value:8.4} lr {current_lr:.6} elapsed {elapsed:7.2}s ({tokens_per_sec:.0} tok/s)",
                 train_config.steps
             );
             loss_history.push(LossEntry {
                 step,
                 loss: loss_value,
                 elapsed,
+                learning_rate: current_lr,
             });
         }
     }

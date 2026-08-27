@@ -27,6 +27,9 @@ fn trains_saves_loads_and_generates() {
         eval_every: 2,
         seed: 42,
         loss_log: None,
+        warmup_steps: 0,
+        save_every: 0,
+        out_dir: None,
     };
 
     let (varmap, _model) = train_model(&dataset, &config, &train_config, &device, None).unwrap();
