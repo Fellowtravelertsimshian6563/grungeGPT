@@ -1,4 +1,0 @@
-# Candle CPU kernels use half precision SIMD on aarch64.
-# Jetson boards that support FP16 need this feature enabled at compile time.
-[target.aarch64-unknown-linux-gnu]
-rustflags = ["-C", "target-feature=+fp16"]
